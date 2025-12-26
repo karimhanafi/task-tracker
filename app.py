@@ -5,19 +5,14 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION: EDIT YOUR DROPDOWN LISTS HERE ---
 BRANCH_OPTIONS = [
-    "HQ", "SUZ", "HUR", "SSH", "LXR", "ASW", 
+    "SUZ", "HUR", "SSH", "LXR", "ASW", 
     "ALX", "CAI", "GIZA", "MANS", "OTHERS"
 ]
 
 TASK_OPTIONS = [
-    "Cash Count", 
-    "Operation Audit", 
-    "Stock Count", 
-    "ATM Review", 
-    "Log Review", 
-    "Documentation Check",
-    "Customer Service Review",
-    "Other"
+    "Cash", 
+    "Operation", 
+    "C.S"
 ]
 
 st.set_page_config(page_title="IC Task Tracker Pro", layout="wide")
