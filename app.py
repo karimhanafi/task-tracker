@@ -6,34 +6,66 @@ from streamlit_gsheets import GSheetsConnection
 # --- CONFIGURATION ---
 BRANCH_OPTIONS = ["HQ", "SUZ", "HUR", "SSH", "LXR", "ASW", "ALX", "CAI", "GIZA", "MANS", "OTHERS"]
 TASK_OPTIONS = [
-    "Cash ", "Operation", "C.S"
+    "Cash Count", "Operation Audit", "Stock Count", "ATM Review", 
+    "Log Review", "Documentation Check", "Customer Service Review", "Other"
 ]
 
-st.set_page_config(page_title="IC Audit Manager Pro", layout="wide", page_icon="🛡️")
+# --- MODERN UI SETUP ---
+st.set_page_config(page_title="IC Audit Pro", layout="wide", page_icon="🛡️")
+
+# Custom CSS for "Modern Look"
+st.markdown("""
+    <style>
+    .block-container {padding-top: 2rem; padding-bottom: 2rem;}
+    div[data-testid="stMetric"] {
+        background-color: #f0f2f6;
+        border-radius: 10px;
+        padding: 15px;
+        border-left: 5px solid #4b7bff;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+    }
+    div[data-testid="stExpander"] {
+        background-color: white;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    h1 {color: #2c3e50;}
+    h2, h3 {color: #34495e;}
+    .stButton>button {
+        border-radius: 20px;
+        font-weight: bold;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- DATABASE CONNECTION ---
 def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        tasks_df = conn.read(worksheet="Tasks", ttl=0)
-        users_df = conn.read(worksheet="Users", ttl=0)
+        # ttl=5 prevents quota errors
+        tasks_df = conn.read(worksheet="Tasks", ttl=5)
+        users_df = conn.read(worksheet="Users", ttl=5)
+        
         if tasks_df is None: tasks_df = pd.DataFrame()
         if users_df is None: users_df = pd.DataFrame()
+        
         # Ensure standard columns exist
-        for col in ['Number of Findings', 'Number of Transaction', 'Branch', 'Employee', 'Completion Status']:
+        cols_needed = ['Number of Findings', 'Number of Transaction', 'Branch', 'Employee', 'Completion Status', 'Assigned Date', 'Assigned Time']
+        for col in cols_needed:
             if col not in tasks_df.columns: tasks_df[col] = 0
+            
         return conn, tasks_df, users_df
     except Exception as e:
-        st.error(f"Database Connection Error: {e}")
+        st.error(f"⚠️ Connection Error: {e}")
         return conn, pd.DataFrame(), pd.DataFrame()
 
 def update_data(conn, df, worksheet_name):
     conn.update(worksheet=worksheet_name, data=df)
+    st.cache_data.clear()
 
 def calculate_duration(start_date, start_time, end_date, end_time):
     try:
         fmt = '%d/%b/%Y %I:%M:%S %p'
-        # Fix missing seconds
         if len(str(start_time).split(':')) == 2: start_time = f"{start_time}:00"
         if len(str(end_time).split(':')) == 2: end_time = f"{end_time}:00"
         
@@ -53,287 +85,250 @@ def main():
 
     conn, tasks_df, users_df = get_data()
 
-    # Data Type Safety
     if not users_df.empty:
         users_df['Username'] = users_df['Username'].astype(str)
         users_df['Password'] = users_df['Password'].astype(str)
     
     if not tasks_df.empty:
-        # Ensure numbers are actual numbers for charts
         tasks_df['Number of Findings'] = pd.to_numeric(tasks_df['Number of Findings'], errors='coerce').fillna(0)
         tasks_df['Number of Transaction'] = pd.to_numeric(tasks_df['Number of Transaction'], errors='coerce').fillna(0)
 
     # --- LOGIN SCREEN ---
     if not st.session_state.logged_in:
-        st.title("🛡️ Audit Portal Login")
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            u = st.text_input("Username")
-            p = st.text_input("Password", type="password")
-            if st.button("Login"):
-                user = users_df[(users_df['Username'] == u) & (users_df['Password'] == p)]
-                if not user.empty:
-                    st.session_state.logged_in = True
-                    st.session_state.user_info = user.iloc[0]
-                    st.rerun()
-                else: st.error("Access Denied")
+        st.markdown("<h1 style='text-align: center;'>🛡️ IC Audit Portal</h1>", unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            with st.form("login_form"):
+                u = st.text_input("Username")
+                p = st.text_input("Password", type="password")
+                if st.form_submit_button("Login Securely", type="primary"):
+                    user = users_df[(users_df['Username'] == u) & (users_df['Password'] == p)]
+                    if not user.empty:
+                        st.session_state.logged_in = True
+                        st.session_state.user_info = user.iloc[0]
+                        st.rerun()
+                    else: st.error("❌ Access Denied")
         return
 
-    # --- DASHBOARD ---
+    # --- LOGGED IN HEADER ---
     user = st.session_state.user_info
-    st.sidebar.title(f"👤 {user['Username']}")
-    st.sidebar.caption(f"Role: {user['Role']}")
-    if st.sidebar.button("Logout"):
-        st.session_state.logged_in = False
-        st.rerun()
+    
+    with st.sidebar:
+        st.markdown(f"### 👋 Welcome, {user['Username']}")
+        st.caption(f"Role: {user['Role']}")
+        if st.button("🚪 Logout"):
+            st.session_state.logged_in = False
+            st.rerun()
+        st.divider()
+        st.caption("Powered by Streamlit Cloud")
 
-    st.title("✅ IC Audit Task Tracker")
-
+    # --- TABS LAYOUT ---
     if user['Role'] == 'Admin':
-        tabs = st.tabs(["📊 Executive Dashboard", "📝 Task Master List (Edit/Delete)", "➕ Assign Task", "⚙️ Users"])
+        st.title("📊 Executive Dashboard")
+        tabs = st.tabs(["📈 Reports & Analytics", "📝 Task Master List", "➕ Assign Task", "👥 User Mgmt"])
     else:
-        tabs = st.tabs(["📈 My Progress", "📝 My Active Tasks", "➕ New Task"])
-
-    # ==========================================
-    # ROLE: USER VIEW
-    # ==========================================
-    if user['Role'] != 'Admin':
-        # --- TAB 1: USER PROGRESS CHART ---
-        with tabs[0]:
-            st.subheader(f"Performance Review: {user['Username']}")
-            if not tasks_df.empty:
-                my_tasks = tasks_df[tasks_df['Employee'] == user['Username']].copy()
-                
-                if not my_tasks.empty:
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.markdown("**Tasks Status**")
-                        status_counts = my_tasks['Completion Status'].value_counts()
-                        st.bar_chart(status_counts)
-                    
-                    with col2:
-                        st.markdown("**Your Findings vs Transactions**")
-                        # Simple aggregate for the user
-                        totals = pd.DataFrame({
-                            'Metric': ['Findings', 'Transactions'],
-                            'Count': [my_tasks['Number of Findings'].sum(), my_tasks['Number of Transaction'].sum()]
-                        })
-                        st.bar_chart(totals, x='Metric', y='Count', color='Metric')
-                    
-                    st.metric("Total Completed Tasks", len(my_tasks[my_tasks['Completion Status']=='Completed']))
-                else:
-                    st.info("No stats available yet.")
-
-        # --- TAB 2: MY ACTIVE TASKS ---
-        with tabs[1]:
-            st.subheader("Pending Action")
-            active_mask = (tasks_df['Completion Status'] != 'Completed') & (tasks_df['Employee'] == user['Username'])
-            active_tasks = tasks_df[active_mask].copy()
-
-            if active_tasks.empty:
-                st.info("🎉 You have no pending tasks.")
-            else:
-                for idx, row in active_tasks.iterrows():
-                    with st.expander(f"📌 {row['Task Description']} ({row['Branch']}) - Started {row['Assigned Time']}"):
-                        c1, c2, c3 = st.columns([1, 1, 1])
-                        # Inputs
-                        curr_t = int(row['Number of Transaction'])
-                        curr_f = int(row['Number of Findings'])
-                        new_t = c1.number_input("Transactions", value=curr_t, min_value=0, key=f"ut_{idx}")
-                        new_f = c2.number_input("Findings", value=curr_f, min_value=0, key=f"uf_{idx}")
-                        
-                        if c3.button("✅ Complete", key=f"ubtn_{idx}"):
-                            now = datetime.now()
-                            c_d = now.strftime('%d/%b/%Y')
-                            c_t = now.strftime('%I:%M:%S %p')
-                            dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], c_d, c_t)
-                            
-                            tasks_df.at[idx, 'Number of Transaction'] = new_t
-                            tasks_df.at[idx, 'Number of Findings'] = new_f
-                            tasks_df.at[idx, 'Completion Status'] = 'Completed'
-                            tasks_df.at[idx, 'Completion Date'] = c_d
-                            tasks_df.at[idx, 'Completion Time'] = c_t
-                            tasks_df.at[idx, 'Duration'] = dur
-                            tasks_df.at[idx, 'Progress %'] = 1
-                            
-                            update_data(conn, tasks_df, "Tasks")
-                            st.success("Completed!")
-                            st.rerun()
-
-        # --- TAB 3: NEW TASK ---
-        with tabs[2]:
-            st.subheader("Log New Audit")
-            with st.form("user_new_task"):
-                c1, c2 = st.columns(2)
-                branch = c1.selectbox("Branch", BRANCH_OPTIONS)
-                task_type = c2.selectbox("Task Type", TASK_OPTIONS)
-                j_date = c1.date_input("Journal Date", datetime.now())
-                
-                if st.form_submit_button("Start Timer"):
-                    now = datetime.now()
-                    new_row = {
-                        'Employee': user['Username'],
-                        'Task Description': task_type,
-                        'Branch': branch,
-                        'Assigned Date': now.strftime('%d/%b/%Y'),
-                        'Assigned Time': now.strftime('%I:%M:%S %p'),
-                        'Journal Date': j_date.strftime('%d/%b/%Y'),
-                        'Number of Transaction': 0, 'Number of Findings': 0,
-                        'Completion Status': 'In Progress'
-                    }
-                    updated_df = pd.concat([tasks_df, pd.DataFrame([new_row])], ignore_index=True)
-                    update_data(conn, updated_df, "Tasks")
-                    st.success("Task Started!")
-                    st.rerun()
+        st.title("✅ My Audit Space")
+        tabs = st.tabs(["🏠 Dashboard", "⚡ Active Tasks", "➕ New Log"])
 
     # ==========================================
     # ROLE: ADMIN VIEW
     # ==========================================
-    else:
-        # --- TAB 1: EXECUTIVE DASHBOARD ---
+    if user['Role'] == 'Admin':
+        # --- TAB 1: REPORTS ---
         with tabs[0]:
-            st.subheader("📊 Audit Command Center")
-            if not tasks_df.empty:
-                # 1. KPI Row
+            if tasks_df.empty:
+                st.info("No data available.")
+            else:
+                # Top KPIs
                 k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Total Audits", len(tasks_df))
-                k2.metric("Total Findings", int(tasks_df['Number of Findings'].sum()))
-                k3.metric("Total Transactions", int(tasks_df['Number of Transaction'].sum()))
-                k4.metric("Active Branches", tasks_df['Branch'].nunique())
-                
-                st.divider()
-                
-                # 2. Advanced Visuals
-                c1, c2 = st.columns(2)
-                
-                with c1:
-                    st.markdown("##### 🚨 Findings Risk by Branch")
-                    # Chart: Total Findings per Branch
-                    risk_data = tasks_df.groupby('Branch')['Number of Findings'].sum().sort_values(ascending=False)
-                    st.bar_chart(risk_data, color="#ff4b4b")
-                
-                with c2:
-                    st.markdown("##### 👥 User Productivity (Tasks)")
-                    # Chart: Total Tasks per User
-                    prod_data = tasks_df['Employee'].value_counts()
-                    st.bar_chart(prod_data, color="#4b7bff")
+                k1.metric("Total Audits", len(tasks_df), border=True)
+                k2.metric("Total Findings", int(tasks_df['Number of Findings'].sum()), "High Risk", border=True)
+                k3.metric("Transactions Checked", int(tasks_df['Number of Transaction'].sum()), border=True)
+                k4.metric("Branches Covered", tasks_df['Branch'].nunique(), border=True)
 
-                c3, c4 = st.columns(2)
+                st.markdown("### 🔍 Drill-Down Analysis")
+                st.info("Hierarchy: User → Branch → Task Type")
+
+                # HIERARCHICAL REPORT GENERATION
+                # We group by the specific order requested
+                drill_df = tasks_df.groupby(['Employee', 'Branch', 'Task Description']).agg(
+                    Count=('Task Description', 'count'),
+                    Total_Transactions=('Number of Transaction', 'sum'),
+                    Total_Findings=('Number of Findings', 'sum')
+                )
                 
-                with c3:
-                    st.markdown("##### 🌍 Branch Coverage by User")
-                    # Chart: How many UNIQUE branches did each user visit?
-                    coverage = tasks_df.groupby('Employee')['Branch'].nunique().sort_values(ascending=False)
-                    st.bar_chart(coverage)
-                    
-                with c4:
-                     st.markdown("##### 📝 Task Types Distribution")
-                     type_dist = tasks_df['Task Description'].value_counts()
-                     st.bar_chart(type_dist)
+                # Display as a styled table
+                st.dataframe(
+                    drill_df.style.background_gradient(cmap="Reds", subset=['Total_Findings']), 
+                    use_container_width=True,
+                    height=500
+                )
 
                 # Export
-                with st.expander("📥 Download Raw Data"):
-                    st.dataframe(tasks_df)
-                    csv = tasks_df.to_csv(index=False).encode('utf-8')
-                    st.download_button("Download CSV", csv, "Full_Audit_Data.csv", "text/csv")
-            else:
-                st.info("No data to visualize.")
+                csv = drill_df.to_csv().encode('utf-8')
+                st.download_button("📥 Download Drill-Down Report", csv, "Audit_Hierarchy_Report.csv", "text/csv")
 
-        # --- TAB 2: MASTER TASK LIST (EDIT/DELETE) ---
+                st.divider()
+                
+                # Visuals
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("**🚨 Findings by Branch**")
+                    st.bar_chart(tasks_df.groupby('Branch')['Number of Findings'].sum(), color="#ff4b4b")
+                with c2:
+                    st.markdown("**📊 Workload Distribution**")
+                    st.bar_chart(tasks_df['Employee'].value_counts(), color="#4b7bff")
+
+        # --- TAB 2: EDIT/DELETE ---
         with tabs[1]:
-            st.subheader("📝 Master Task Manager (Edit/Delete)")
-            
-            # Filter Controls
-            col_f1, col_f2 = st.columns(2)
-            filter_status = col_f1.radio("Filter Status:", ["Active Only", "All Tasks (History)"], horizontal=True)
-            search_branch = col_f2.selectbox("Filter by Branch (Optional)", ["All"] + BRANCH_OPTIONS)
-            
-            # Apply Filters
-            if not tasks_df.empty:
-                df_view = tasks_df.copy()
-                
-                if filter_status == "Active Only":
-                    df_view = df_view[df_view['Completion Status'] != 'Completed']
-                
-                if search_branch != "All":
-                    df_view = df_view[df_view['Branch'] == search_branch]
-                
-                if df_view.empty:
-                    st.info("No tasks found matching filters.")
-                else:
-                    # Show list
-                    for idx, row in df_view.iterrows():
-                        # Color code headers
-                        icon = "🟢" if row['Completion Status'] == 'Completed' else "Oo"
-                        header = f"{icon} {row['Employee']} | {row['Task Description']} | {row['Branch']} | Findings: {row['Number of Findings']}"
-                        
-                        with st.expander(header):
-                            c_edit1, c_edit2, c_edit3 = st.columns(3)
+            st.markdown("#### 🛠️ Manage Records")
+            c_fil1, c_fil2 = st.columns(2)
+            f_status = c_fil1.selectbox("Status Filter", ["Active Only", "All History"])
+            f_branch = c_fil2.selectbox("Branch Filter", ["All"] + BRANCH_OPTIONS)
+
+            df_view = tasks_df.copy()
+            if f_status == "Active Only": df_view = df_view[df_view['Completion Status'] != 'Completed']
+            if f_branch != "All": df_view = df_view[df_view['Branch'] == f_branch]
+
+            if df_view.empty:
+                st.warning("No records found.")
+            else:
+                for idx, row in df_view.iterrows():
+                    status_icon = "✅" if row['Completion Status'] == 'Completed' else "⏳"
+                    lbl = f"{status_icon} **{row['Employee']}** | {row['Task Description']} @ {row['Branch']}"
+                    
+                    with st.expander(lbl):
+                        with st.form(key=f"adm_edit_{idx}"):
+                            c1, c2, c3 = st.columns(3)
+                            n_trans = c1.number_input("Transactions", value=int(row['Number of Transaction']))
+                            n_find = c2.number_input("Findings", value=int(row['Number of Findings']))
                             
-                            # ALLOW EDITING OF CRITICAL FIELDS
-                            new_trans = c_edit1.number_input("Transactions", value=int(row['Number of Transaction']), key=f"adm_t_{idx}")
-                            new_find = c_edit2.number_input("Findings", value=int(row['Number of Findings']), key=f"adm_f_{idx}")
+                            c_act1, c_act2 = st.columns(2)
+                            is_save = c_act1.form_submit_button("💾 Update Data")
+                            is_del = c_act2.form_submit_button("🗑️ DELETE Task", type="primary")
+
+                            if is_save:
+                                tasks_df.at[idx, 'Number of Transaction'] = n_trans
+                                tasks_df.at[idx, 'Number of Findings'] = n_find
+                                update_data(conn, tasks_df, "Tasks")
+                                st.success("Updated!")
+                                st.rerun()
                             
-                            # DELETE BUTTON
-                            if c_edit3.button("🗑️ DELETE PERMANENTLY", key=f"adm_del_{idx}"):
+                            if is_del:
                                 tasks_df = tasks_df.drop(idx)
                                 update_data(conn, tasks_df, "Tasks")
-                                st.warning("Task Deleted.")
-                                st.rerun()
-                                
-                            # UPDATE BUTTON
-                            if st.button("💾 Save Changes", key=f"adm_save_{idx}"):
-                                tasks_df.at[idx, 'Number of Transaction'] = new_trans
-                                tasks_df.at[idx, 'Number of Findings'] = new_find
-                                update_data(conn, tasks_df, "Tasks")
-                                st.success("Record Updated.")
+                                st.warning("Deleted!")
                                 st.rerun()
 
-        # --- TAB 3: ASSIGN TASK ---
+        # --- TAB 3: ASSIGN ---
         with tabs[2]:
-            st.subheader("Assign Task to User")
+            st.markdown("#### ➕ Assign New Audit")
             with st.form("admin_assign"):
                 c1, c2 = st.columns(2)
-                target = c1.selectbox("Assign To", users_df['Username'].unique()) if not users_df.empty else c1.text_input("User")
-                branch = c2.selectbox("Branch", BRANCH_OPTIONS)
-                task_type = c1.selectbox("Task Type", TASK_OPTIONS)
-                j_date = c2.date_input("Journal Date", datetime.now())
+                tgt = c1.selectbox("User", users_df['Username'].unique()) if not users_df.empty else c1.text_input("User")
+                brn = c2.selectbox("Branch", BRANCH_OPTIONS)
+                typ = c1.selectbox("Task", TASK_OPTIONS)
+                jdt = c2.date_input("Journal Date")
                 
-                if st.form_submit_button("Assign Task"):
+                if st.form_submit_button("🚀 Assign Now", type="primary"):
                     now = datetime.now()
                     new_row = {
-                        'Employee': target,
-                        'Task Description': task_type,
-                        'Branch': branch,
-                        'Assigned Date': now.strftime('%d/%b/%Y'),
-                        'Assigned Time': now.strftime('%I:%M:%S %p'),
-                        'Journal Date': j_date.strftime('%d/%b/%Y'),
-                        'Number of Transaction': 0, 'Number of Findings': 0,
-                        'Completion Status': 'In Progress'
+                        'Employee': tgt, 'Task Description': typ, 'Branch': brn,
+                        'Assigned Date': now.strftime('%d/%b/%Y'), 'Assigned Time': now.strftime('%I:%M:%S %p'),
+                        'Journal Date': jdt.strftime('%d/%b/%Y'),
+                        'Number of Transaction': 0, 'Number of Findings': 0, 'Completion Status': 'In Progress'
                     }
-                    updated_df = pd.concat([tasks_df, pd.DataFrame([new_row])], ignore_index=True)
-                    update_data(conn, updated_df, "Tasks")
-                    st.success(f"Assigned to {target}!")
+                    update_data(conn, pd.concat([tasks_df, pd.DataFrame([new_row])], ignore_index=True), "Tasks")
+                    st.success("Assigned!")
                     st.rerun()
 
         # --- TAB 4: USERS ---
         with tabs[3]:
-            st.subheader("User Management")
+            st.markdown("#### 👥 User Directory")
             c1, c2 = st.columns(2)
             with c1:
-                new_u = st.text_input("New Username")
-                new_p = st.text_input("New Password")
-                new_r = st.selectbox("Role", ["User", "Admin"])
-                if st.button("Create User"):
-                    if new_u not in users_df['Username'].values:
-                        new_data = pd.DataFrame([{'Username': new_u, 'Password': new_p, 'Role': new_r}])
-                        update_data(conn, pd.concat([users_df, new_data], ignore_index=True), "Users")
-                        st.success("User Added")
-                        st.rerun()
-                    else: st.error("User exists")
+                with st.form("add_user"):
+                    nu = st.text_input("Username")
+                    np = st.text_input("Password")
+                    nr = st.selectbox("Role", ["User", "Admin"])
+                    if st.form_submit_button("Add User"):
+                        if nu not in users_df['Username'].values:
+                            new_u = pd.DataFrame([{'Username': nu, 'Password': np, 'Role': nr}])
+                            update_data(conn, pd.concat([users_df, new_u], ignore_index=True), "Users")
+                            st.success("User Created")
+                            st.rerun()
+                        else: st.error("User exists")
             with c2:
-                st.dataframe(users_df[['Username', 'Role']], hide_index=True)
+                st.dataframe(users_df[['Username', 'Role']], hide_index=True, use_container_width=True)
+
+    # ==========================================
+    # ROLE: USER VIEW
+    # ==========================================
+    else:
+        # --- TAB 1: DASHBOARD ---
+        with tabs[0]:
+            if not tasks_df.empty:
+                my_df = tasks_df[tasks_df['Employee'] == user['Username']]
+                if not my_df.empty:
+                    c1, c2 = st.columns(2)
+                    c1.metric("Tasks Completed", len(my_df[my_df['Completion Status']=='Completed']))
+                    c2.metric("Pending", len(my_df[my_df['Completion Status']!='Completed']))
+                    st.bar_chart(my_df['Task Description'].value_counts())
+                else: st.info("No activity yet.")
+
+        # --- TAB 2: ACTIVE TASKS ---
+        with tabs[1]:
+            mask = (tasks_df['Completion Status'] != 'Completed') & (tasks_df['Employee'] == user['Username'])
+            active = tasks_df[mask].copy()
+            
+            if active.empty:
+                st.success("🎉 All caught up! No pending tasks.")
+            else:
+                for idx, row in active.iterrows():
+                    with st.expander(f"📌 {row['Task Description']} @ {row['Branch']}", expanded=True):
+                        st.caption(f"Started: {row['Assigned Time']}")
+                        with st.form(key=f"u_act_{idx}"):
+                            c1, c2 = st.columns(2)
+                            nt = c1.number_input("Transactions", value=int(row['Number of Transaction']))
+                            nf = c2.number_input("Findings", value=int(row['Number of Findings']))
+                            
+                            if st.form_submit_button("✅ Mark Complete", type="primary"):
+                                now = datetime.now()
+                                cd, ct = now.strftime('%d/%b/%Y'), now.strftime('%I:%M:%S %p')
+                                dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], cd, ct)
+                                
+                                tasks_df.at[idx, 'Number of Transaction'] = nt
+                                tasks_df.at[idx, 'Number of Findings'] = nf
+                                tasks_df.at[idx, 'Completion Status'] = 'Completed'
+                                tasks_df.at[idx, 'Completion Date'] = cd
+                                tasks_df.at[idx, 'Completion Time'] = ct
+                                tasks_df.at[idx, 'Duration'] = dur
+                                tasks_df.at[idx, 'Progress %'] = 1
+                                
+                                update_data(conn, tasks_df, "Tasks")
+                                st.balloons()
+                                st.rerun()
+
+        # --- TAB 3: NEW LOG ---
+        with tabs[2]:
+            st.markdown("#### ⚡ Quick Log")
+            with st.form("u_new"):
+                c1, c2 = st.columns(2)
+                br = c1.selectbox("Branch", BRANCH_OPTIONS)
+                ty = c2.selectbox("Task", TASK_OPTIONS)
+                jd = c1.date_input("Journal Date")
+                
+                if st.form_submit_button("Start Timer", type="primary"):
+                    now = datetime.now()
+                    new_r = {
+                        'Employee': user['Username'], 'Task Description': ty, 'Branch': br,
+                        'Assigned Date': now.strftime('%d/%b/%Y'), 'Assigned Time': now.strftime('%I:%M:%S %p'),
+                        'Journal Date': jd.strftime('%d/%b/%Y'),
+                        'Number of Transaction': 0, 'Number of Findings': 0, 'Completion Status': 'In Progress'
+                    }
+                    update_data(conn, pd.concat([tasks_df, pd.DataFrame([new_r])], ignore_index=True), "Tasks")
+                    st.success("Started!")
+                    st.rerun()
 
 if __name__ == "__main__":
     main()
