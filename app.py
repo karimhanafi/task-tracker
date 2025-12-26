@@ -5,13 +5,13 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION: EDIT YOUR DROPDOWN LISTS HERE ---
 BRANCH_OPTIONS = [
-    "SUZ", "HUR", "SSH", "LXR", "ASW", 
+    "HQ", "SUZ", "HUR", "SSH", "LXR", "ASW", 
     "ALX", "CAI", "GIZA", "MANS", "OTHERS"
 ]
 
 TASK_OPTIONS = [
-    "Cash", 
-    "Operation", 
+    "Cash ", 
+    "Operation ", 
     "C.S"
 ]
 
@@ -25,7 +25,7 @@ def get_data():
         users_df = conn.read(worksheet="Users", ttl=0)
         if tasks_df is None: tasks_df = pd.DataFrame()
         if users_df is None: users_df = pd.DataFrame()
-        # Handle new columns if they are empty in older rows
+        # Ensure numeric columns exist and fill NaNs
         if 'Number of Findings' not in tasks_df.columns: tasks_df['Number of Findings'] = 0
         if 'Number of Transaction' not in tasks_df.columns: tasks_df['Number of Transaction'] = 0
         return conn, tasks_df, users_df
@@ -95,7 +95,7 @@ def main():
     else:
         tabs = st.tabs(["📝 My Tasks", "➕ New Task"])
 
-    # === TAB 1: ACTIVE TASKS ===
+    # === TAB 1: ACTIVE TASKS (UPDATED LOGIC) ===
     with tabs[0]:
         st.subheader("Tasks In Progress")
         if not tasks_df.empty:
@@ -110,27 +110,43 @@ def main():
                 st.info("No pending tasks.")
             else:
                 for idx, row in active_tasks.iterrows():
-                    # Display Findings/Transactions in the header
-                    header_text = f"{row['Employee']} | {row['Task Description']} ({row['Branch']}) | Findings: {row.get('Number of Findings',0)}"
-                    with st.expander(header_text):
-                        st.write(f"**Started:** {row['Assigned Date']} at {row['Assigned Time']}")
-                        c1, c2 = st.columns(2)
-                        d = c1.date_input("Completion Date", datetime.now(), key=f"d{idx}")
-                        t = c1.time_input("Completion Time", datetime.now(), key=f"t{idx}")
+                    # Card Header
+                    with st.expander(f"{row['Employee']} | {row['Task Description']} ({row['Branch']})"):
+                        st.caption(f"Started: {row['Assigned Date']} at {row['Assigned Time']}")
                         
-                        if c2.button("Mark Complete", key=f"btn{idx}"):
-                            c_d_str = d.strftime('%d/%b/%Y')
-                            c_t_str = t.strftime('%I:%M:%S %p')
+                        # --- NEW: User Inputs for Findings & Transactions ---
+                        c1, c2, c3 = st.columns([1, 1, 1])
+                        
+                        # Get existing values or default to 0
+                        current_trans = int(row['Number of Transaction']) if pd.notna(row['Number of Transaction']) else 0
+                        current_find = int(row['Number of Findings']) if pd.notna(row['Number of Findings']) else 0
+                        
+                        # Input fields (User edits these BEFORE completing)
+                        new_trans = c1.number_input("Transactions", value=current_trans, min_value=0, step=1, key=f"tr_{idx}")
+                        new_find = c2.number_input("Findings", value=current_find, min_value=0, step=1, key=f"fn_{idx}")
+                        
+                        # --- NEW: Auto-Complete Button ---
+                        if c3.button("✅ Mark Complete", key=f"btn{idx}"):
+                            # 1. Capture AUTO Time
+                            now = datetime.now()
+                            c_d_str = now.strftime('%d/%b/%Y')
+                            c_t_str = now.strftime('%I:%M:%S %p')
+                            
+                            # 2. Calculate Duration
                             dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], c_d_str, c_t_str)
                             
+                            # 3. Update DataFrame
+                            tasks_df.at[idx, 'Number of Transaction'] = new_trans
+                            tasks_df.at[idx, 'Number of Findings'] = new_find
                             tasks_df.at[idx, 'Completion Status'] = 'Completed'
                             tasks_df.at[idx, 'Completion Date'] = c_d_str
                             tasks_df.at[idx, 'Completion Time'] = c_t_str
                             tasks_df.at[idx, 'Duration'] = dur
                             tasks_df.at[idx, 'Progress %'] = 1
                             
+                            # 4. Save to Cloud
                             update_data(conn, tasks_df, "Tasks")
-                            st.success("Completed!")
+                            st.success(f"Task Completed at {c_t_str}!")
                             st.rerun()
 
     # === TAB 2: ADD NEW TASK ===
@@ -145,22 +161,15 @@ def main():
             else:
                 target = c1.text_input("Assign To", value=user['Username'], disabled=True)
             
-            # Dropdowns for standardized data
+            # Standardized Inputs
             branch = c2.selectbox("Branch", BRANCH_OPTIONS)
             task_desc = c1.selectbox("Task Type", TASK_OPTIONS)
-            
-            # Journal Date
             journal_date = c2.date_input("Journal Date", datetime.now())
             
-            # Numeric Fields
-            c3, c4 = st.columns(2)
-            num_trans = c3.number_input("Number of Transactions", min_value=0, step=1)
-            num_find = c4.number_input("Number of Findings", min_value=0, step=1)
-            
-            # Note: We do NOT ask for time. We capture it automatically below.
+            # Note: We initialize findings/transactions to 0 here. 
+            # The User will update them in Tab 1 before completing.
             
             if st.form_submit_button("Start Task"):
-                # AUTO TIME CAPTURE
                 now_date = datetime.now().strftime('%d/%b/%Y')
                 now_time = datetime.now().strftime('%I:%M:%S %p')
                 
@@ -169,10 +178,10 @@ def main():
                     'Task Description': task_desc,
                     'Branch': branch,
                     'Assigned Date': now_date,
-                    'Assigned Time': now_time,  # Automatic system time
+                    'Assigned Time': now_time,
                     'Journal Date': journal_date.strftime('%d/%b/%Y'),
-                    'Number of Transaction': num_trans,
-                    'Number of Findings': num_find,
+                    'Number of Transaction': 0, # Default 0
+                    'Number of Findings': 0,    # Default 0
                     'Completion Status': 'In Progress',
                     'Progress %': 0
                 }
@@ -188,11 +197,10 @@ def main():
         with tabs[2]:
             st.subheader("Detailed Audit Report")
             if not tasks_df.empty:
-                # 1. Clean Data for Math
+                # 1. Clean Data
                 tasks_df['Number of Findings'] = pd.to_numeric(tasks_df['Number of Findings'], errors='coerce').fillna(0)
                 tasks_df['Number of Transaction'] = pd.to_numeric(tasks_df['Number of Transaction'], errors='coerce').fillna(0)
                 
-                # Helper for Duration
                 def parse_mins(d_str):
                     try:
                         import re
@@ -204,7 +212,7 @@ def main():
 
                 tasks_df['Mins'] = tasks_df['Duration'].apply(parse_mins)
                 
-                # 2. Group By Branch -> Employee -> Task
+                # 2. Report Logic
                 report = tasks_df.groupby(['Branch', 'Employee', 'Task Description']).agg(
                     Total_Tasks=('Task Description', 'count'),
                     Total_Findings=('Number of Findings', 'sum'),
@@ -216,10 +224,8 @@ def main():
                 
                 # 3. Display
                 st.dataframe(report, use_container_width=True)
-                
-                # Download Button
                 csv = report.to_csv(index=False).encode('utf-8')
-                st.download_button("Download Report to Excel", csv, "Audit_Report.csv", "text/csv")
+                st.download_button("Download Report", csv, "Audit_Report.csv", "text/csv")
             else:
                 st.info("No data available.")
 
