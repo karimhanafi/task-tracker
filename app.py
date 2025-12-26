@@ -3,23 +3,39 @@ import pandas as pd
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION: EDIT YOUR DROPDOWN LISTS HERE ---
+BRANCH_OPTIONS = [
+    "HQ", "SUZ", "HUR", "SSH", "LXR", "ASW", 
+    "ALX", "CAI", "GIZA", "MANS", "OTHERS"
+]
+
+TASK_OPTIONS = [
+    "Cash Count", 
+    "Operation Audit", 
+    "Stock Count", 
+    "ATM Review", 
+    "Log Review", 
+    "Documentation Check",
+    "Customer Service Review",
+    "Other"
+]
+
 st.set_page_config(page_title="IC Task Tracker Pro", layout="wide")
 
 # --- DATABASE CONNECTION ---
 def get_data():
-    # Use the connection we will configure in Streamlit Secrets
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # Read data with ttl=0 (Time To Live = 0) so it doesn't cache old data
     try:
         tasks_df = conn.read(worksheet="Tasks", ttl=0)
         users_df = conn.read(worksheet="Users", ttl=0)
-        # Ensure dataframes aren't empty/None
         if tasks_df is None: tasks_df = pd.DataFrame()
         if users_df is None: users_df = pd.DataFrame()
+        # Handle new columns if they are empty in older rows
+        if 'Number of Findings' not in tasks_df.columns: tasks_df['Number of Findings'] = 0
+        if 'Number of Transaction' not in tasks_df.columns: tasks_df['Number of Transaction'] = 0
         return conn, tasks_df, users_df
     except Exception as e:
-        st.error(f"Error connecting to Google Sheets. Check your Secrets configuration. Error: {e}")
+        st.error(f"Connection Error: {e}")
         return conn, pd.DataFrame(), pd.DataFrame()
 
 def update_data(conn, df, worksheet_name):
@@ -27,9 +43,7 @@ def update_data(conn, df, worksheet_name):
 
 def calculate_duration(start_date, start_time, end_date, end_time):
     try:
-        # Standardize format
         fmt = '%d/%b/%Y %I:%M:%S %p'
-        # Add seconds if missing
         if len(str(start_time).split(':')) == 2: start_time = f"{start_time}:00"
         if len(str(end_time).split(':')) == 2: end_time = f"{end_time}:00"
         
@@ -38,11 +52,9 @@ def calculate_duration(start_date, start_time, end_date, end_time):
         
         diff = dt_end - dt_start
         total_seconds = diff.total_seconds()
-        
         if total_seconds < 0: return "0h 0m"
         return f"{int(total_seconds // 3600)}h {int((total_seconds % 3600) // 60)}m"
-    except:
-        return "0h 0m"
+    except: return "0h 0m"
 
 # --- MAIN APP ---
 def main():
@@ -50,32 +62,27 @@ def main():
         st.session_state.logged_in = False
         st.session_state.user_info = None
 
-    # Load Data LIVE from Google Sheets
     conn, tasks_df, users_df = get_data()
 
-    # Clean user data types for login check
     if not users_df.empty:
         users_df['Username'] = users_df['Username'].astype(str)
         users_df['Password'] = users_df['Password'].astype(str)
 
     # --- LOGIN SCREEN ---
     if not st.session_state.logged_in:
-        st.title("🔒 Login")
+        st.title("🔒 Audit Team Login")
         c1, c2 = st.columns([1, 2])
         with c1:
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             if st.button("Login"):
-                if users_df.empty:
-                    st.error("Database connection failed or Users sheet is empty.")
+                user_row = users_df[(users_df['Username'] == username) & (users_df['Password'] == password)]
+                if not user_row.empty:
+                    st.session_state.logged_in = True
+                    st.session_state.user_info = user_row.iloc[0]
+                    st.rerun()
                 else:
-                    user_row = users_df[(users_df['Username'] == username) & (users_df['Password'] == password)]
-                    if not user_row.empty:
-                        st.session_state.logged_in = True
-                        st.session_state.user_info = user_row.iloc[0]
-                        st.rerun()
-                    else:
-                        st.error("Invalid Username or Password")
+                    st.error("Invalid Credentials")
         return
 
     # --- DASHBOARD ---
@@ -86,100 +93,111 @@ def main():
         st.session_state.logged_in = False
         st.rerun()
 
-    st.title("✅ Task Tracker Cloud")
+    st.title("✅ IC Audit Task Tracker")
     
-    # Define Tabs
     if user['Role'] == 'Admin':
-        tabs = st.tabs(["📝 Task Management", "➕ Assign Task", "📊 Reports", "⚙️ User Management"])
+        tabs = st.tabs(["📝 Active Tasks", "➕ New Task", "📊 Admin Reports", "⚙️ Users"])
     else:
-        tabs = st.tabs(["📝 My Tasks", "➕ Add Task"])
+        tabs = st.tabs(["📝 My Tasks", "➕ New Task"])
 
-    # === TAB 1: VIEW & COMPLETE ===
+    # === TAB 1: ACTIVE TASKS ===
     with tabs[0]:
-        st.subheader("Active Tasks")
-        
-        # Filter Logic
+        st.subheader("Tasks In Progress")
         if not tasks_df.empty:
             if user['Role'] == 'Admin':
-                # Admin sees all tasks not completed
                 mask = tasks_df['Completion Status'] != 'Completed'
             else:
-                # User sees only their own tasks not completed
                 mask = (tasks_df['Completion Status'] != 'Completed') & (tasks_df['Employee'] == user['Username'])
             
             active_tasks = tasks_df[mask].copy()
             
             if active_tasks.empty:
-                st.info("No active tasks found.")
+                st.info("No pending tasks.")
             else:
-                # Iterate through filtered tasks
                 for idx, row in active_tasks.iterrows():
-                    with st.expander(f"{row['Employee']}: {row['Task Description']} ({row['Branch']})"):
+                    # Display Findings/Transactions in the header
+                    header_text = f"{row['Employee']} | {row['Task Description']} ({row['Branch']}) | Findings: {row.get('Number of Findings',0)}"
+                    with st.expander(header_text):
+                        st.write(f"**Started:** {row['Assigned Date']} at {row['Assigned Time']}")
                         c1, c2 = st.columns(2)
-                        d = c1.date_input("Done Date", datetime.now(), key=f"d{idx}")
-                        t = c1.time_input("Done Time", datetime.now(), key=f"t{idx}")
+                        d = c1.date_input("Completion Date", datetime.now(), key=f"d{idx}")
+                        t = c1.time_input("Completion Time", datetime.now(), key=f"t{idx}")
                         
                         if c2.button("Mark Complete", key=f"btn{idx}"):
                             c_d_str = d.strftime('%d/%b/%Y')
                             c_t_str = t.strftime('%I:%M:%S %p')
                             dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], c_d_str, c_t_str)
                             
-                            # Update the original DataFrame using the index
                             tasks_df.at[idx, 'Completion Status'] = 'Completed'
                             tasks_df.at[idx, 'Completion Date'] = c_d_str
                             tasks_df.at[idx, 'Completion Time'] = c_t_str
                             tasks_df.at[idx, 'Duration'] = dur
                             tasks_df.at[idx, 'Progress %'] = 1
                             
-                            # Push update to Google Sheets
                             update_data(conn, tasks_df, "Tasks")
-                            st.success("Task updated successfully!")
+                            st.success("Completed!")
                             st.rerun()
-        else:
-            st.warning("Task database is empty.")
 
-    # === TAB 2: ADD TASK ===
+    # === TAB 2: ADD NEW TASK ===
     with tabs[1]:
-        st.subheader("New Task")
+        st.subheader("Log Audit Task")
         with st.form("new_task"):
             c1, c2 = st.columns(2)
             
-            # Target User Selection
+            # User Selection
             if user['Role'] == 'Admin' and not users_df.empty:
                 target = c1.selectbox("Assign To", users_df['Username'].unique())
             else:
                 target = c1.text_input("Assign To", value=user['Username'], disabled=True)
-                
-            desc = c2.text_input("Description")
-            branch = c1.text_input("Branch (e.g. SUZ, HUR)", value="HQ")
             
-            a_date = c2.date_input("Assigned Date", datetime.now())
-            a_time = c2.time_input("Assigned Time", datetime.now())
-
-            if st.form_submit_button("Create Task"):
+            # Dropdowns for standardized data
+            branch = c2.selectbox("Branch", BRANCH_OPTIONS)
+            task_desc = c1.selectbox("Task Type", TASK_OPTIONS)
+            
+            # Journal Date
+            journal_date = c2.date_input("Journal Date", datetime.now())
+            
+            # Numeric Fields
+            c3, c4 = st.columns(2)
+            num_trans = c3.number_input("Number of Transactions", min_value=0, step=1)
+            num_find = c4.number_input("Number of Findings", min_value=0, step=1)
+            
+            # Note: We do NOT ask for time. We capture it automatically below.
+            
+            if st.form_submit_button("Start Task"):
+                # AUTO TIME CAPTURE
+                now_date = datetime.now().strftime('%d/%b/%Y')
+                now_time = datetime.now().strftime('%I:%M:%S %p')
+                
                 new_data = {
                     'Employee': target,
-                    'Task Description': desc,
+                    'Task Description': task_desc,
                     'Branch': branch,
-                    'Assigned Date': a_date.strftime('%d/%b/%Y'),
-                    'Assigned Time': a_time.strftime('%I:%M:%S %p'),
+                    'Assigned Date': now_date,
+                    'Assigned Time': now_time,  # Automatic system time
+                    'Journal Date': journal_date.strftime('%d/%b/%Y'),
+                    'Number of Transaction': num_trans,
+                    'Number of Findings': num_find,
                     'Completion Status': 'In Progress',
                     'Progress %': 0
                 }
-                # Add new row
+                
                 new_df = pd.DataFrame([new_data])
                 updated_df = pd.concat([tasks_df, new_df], ignore_index=True)
-                
                 update_data(conn, updated_df, "Tasks")
-                st.success("Task created!")
+                st.success(f"Task Started at {now_time}!")
                 st.rerun()
 
     # === TAB 3: REPORTS (ADMIN ONLY) ===
     if user['Role'] == 'Admin':
         with tabs[2]:
-            st.subheader("Analytics")
+            st.subheader("Detailed Audit Report")
             if not tasks_df.empty:
-                # Helper to parse minutes
+                # 1. Clean Data for Math
+                tasks_df['Number of Findings'] = pd.to_numeric(tasks_df['Number of Findings'], errors='coerce').fillna(0)
+                tasks_df['Number of Transaction'] = pd.to_numeric(tasks_df['Number of Transaction'], errors='coerce').fillna(0)
+                
+                # Helper for Duration
                 def parse_mins(d_str):
                     try:
                         import re
@@ -191,33 +209,40 @@ def main():
 
                 tasks_df['Mins'] = tasks_df['Duration'].apply(parse_mins)
                 
-                # Simple pivot table
-                report = tasks_df.groupby(['Employee', 'Branch']).agg(
-                    Count=('Task Description', 'count'),
-                    Avg_Mins=('Mins', 'mean')
+                # 2. Group By Branch -> Employee -> Task
+                report = tasks_df.groupby(['Branch', 'Employee', 'Task Description']).agg(
+                    Total_Tasks=('Task Description', 'count'),
+                    Total_Findings=('Number of Findings', 'sum'),
+                    Total_Transactions=('Number of Transaction', 'sum'),
+                    Avg_Time_Mins=('Mins', 'mean')
                 ).reset_index()
-                report['Avg_Mins'] = report['Avg_Mins'].round(1)
                 
+                report['Avg_Time_Mins'] = report['Avg_Time_Mins'].round(1)
+                
+                # 3. Display
                 st.dataframe(report, use_container_width=True)
+                
+                # Download Button
+                csv = report.to_csv(index=False).encode('utf-8')
+                st.download_button("Download Report to Excel", csv, "Audit_Report.csv", "text/csv")
             else:
-                st.info("No data to report.")
+                st.info("No data available.")
 
     # === TAB 4: USER MGMT (ADMIN ONLY) ===
     if user['Role'] == 'Admin':
         with tabs[3]:
-            st.subheader("Add User")
+            st.subheader("Create User")
             u = st.text_input("New Username")
             p = st.text_input("New Password")
             r = st.selectbox("Role", ["User", "Admin"])
-            
-            if st.button("Create User"):
+            if st.button("Add User"):
                 if u in users_df['Username'].values:
-                    st.error("User already exists!")
+                    st.error("Exists!")
                 else:
                     new_user = pd.DataFrame([{'Username': u, 'Password': p, 'Role': r}])
                     updated_users = pd.concat([users_df, new_user], ignore_index=True)
                     update_data(conn, updated_users, "Users")
-                    st.success(f"User {u} created!")
+                    st.success("Created!")
                     st.rerun()
 
 if __name__ == "__main__":
