@@ -1,48 +1,43 @@
 import streamlit as st
 import pandas as pd
+import duckdb
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION & DARK MODE FORCE ---
+st.set_page_config(page_title="IC Audit Pro", layout="wide", page_icon="🛡️")
+
+# 1. VISUALS: Use the Dark Mode CSS from Code 2
+st.markdown("""
+<style>
+    /* Force Cards to be Dark Grey */
+    div[data-testid="metric-container"] {
+        background-color: #262730 !important;
+        border: 1px solid #464b5c !important;
+        color: #FFFFFF !important;
+        border-radius: 10px;
+        border-left: 5px solid #E694FF !important; /* Purple Accent */
+    }
+    div[data-testid="metric-container"] label { color: #FFFFFF !important; }
+    div[data-testid="stMetricValue"] { color: #FFFFFF !important; }
+    div[data-testid="stExpander"] { background-color: #262730; border-radius: 10px; }
+    
+    /* Button Styling */
+    .stButton>button { border-radius: 20px; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- CONSTANTS ---
 BRANCH_OPTIONS = ["HQ", "SUZ", "HUR", "SSH", "LXR", "ASW", "ALX", "CAI", "GIZA", "MANS", "OTHERS"]
 TASK_OPTIONS = [
     "Cash Count", "Operation Audit", "Stock Count", "ATM Review", 
     "Log Review", "Documentation Check", "Customer Service Review", "Other"
 ]
 
-# --- MODERN UI SETUP ---
-st.set_page_config(page_title="IC Audit Pro", layout="wide", page_icon="🛡️")
-
-# Custom CSS for "Modern Look"
-st.markdown("""
-    <style>
-    .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-    div[data-testid="stMetric"] {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 15px;
-        border-left: 5px solid #4b7bff;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-    }
-    div[data-testid="stExpander"] {
-        background-color: #262730;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    h1 {color: #2c3e50;}
-    h2, h3 {color: #34495e;}
-    .stButton>button {
-        border-radius: 20px;
-        font-weight: bold;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# --- DATABASE CONNECTION ---
+# --- DATABASE CONNECTION (From Code 1) ---
 def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        # ttl=5 prevents quota errors
         tasks_df = conn.read(worksheet="Tasks", ttl=5)
         users_df = conn.read(worksheet="Users", ttl=5)
         
@@ -50,7 +45,7 @@ def get_data():
         if users_df is None: users_df = pd.DataFrame()
         
         # Ensure standard columns exist
-        cols_needed = ['Number of Findings', 'Number of Transaction', 'Branch', 'Employee', 'Completion Status', 'Assigned Date', 'Assigned Time']
+        cols_needed = ['Number of Findings', 'Number of Transaction', 'Branch', 'Employee', 'Completion Status', 'Assigned Date', 'Assigned Time', 'Journal Date', 'Task Description']
         for col in cols_needed:
             if col not in tasks_df.columns: tasks_df[col] = 0
             
@@ -73,7 +68,6 @@ def calculate_duration(start_date, start_time, end_date, end_time):
         dt_e = datetime.strptime(f"{end_date} {end_time}", fmt)
         diff = dt_e - dt_s
         secs = diff.total_seconds()
-        if secs < 0: return "0h 0m"
         return f"{int(secs // 3600)}h {int((secs % 3600) // 60)}m"
     except: return "0h 0m"
 
@@ -85,6 +79,7 @@ def main():
 
     conn, tasks_df, users_df = get_data()
 
+    # Data Type Fixes
     if not users_df.empty:
         users_df['Username'] = users_df['Username'].astype(str)
         users_df['Password'] = users_df['Password'].astype(str)
@@ -92,6 +87,9 @@ def main():
     if not tasks_df.empty:
         tasks_df['Number of Findings'] = pd.to_numeric(tasks_df['Number of Findings'], errors='coerce').fillna(0)
         tasks_df['Number of Transaction'] = pd.to_numeric(tasks_df['Number of Transaction'], errors='coerce').fillna(0)
+        # Fix Date for Filtering
+        if 'Journal Date' in tasks_df.columns:
+            tasks_df['Journal Date'] = pd.to_datetime(tasks_df['Journal Date'], format='%d/%b/%Y', errors='coerce')
 
     # --- LOGIN SCREEN ---
     if not st.session_state.logged_in:
@@ -114,113 +112,116 @@ def main():
     user = st.session_state.user_info
     
     with st.sidebar:
-        st.markdown(f"### 👋 Welcome, {user['Username']}")
+        st.markdown(f"### 👋 {user['Username']}")
         st.caption(f"Role: {user['Role']}")
         if st.button("🚪 Logout"):
             st.session_state.logged_in = False
             st.rerun()
         st.divider()
-        st.caption("Powered by Streamlit Cloud")
 
-    # --- TABS LAYOUT ---
+    # ==========================================
+    # ROLE: ADMIN VIEW (Combines Code 1 Logic + Code 2 Analytics)
+    # ==========================================
     if user['Role'] == 'Admin':
         st.title("📊 Executive Dashboard")
-        tabs = st.tabs(["📈 Reports & Analytics", "📝 Task Master List", "➕ Assign Task", "👥 User Mgmt"])
-    else:
-        st.title("✅ My Audit Space")
-        tabs = st.tabs(["🏠 Dashboard", "⚡ Active Tasks", "➕ New Log"])
+        # Added "SQL Tool" as a new tab
+        tabs = st.tabs(["📈 Analytics & Filters", "📝 Manage Tasks", "➕ Assign Task", "💻 SQL Tool", "👥 User Mgmt"])
 
-    # ==========================================
-    # ROLE: ADMIN VIEW
-    # ==========================================
-    if user['Role'] == 'Admin':
-        # --- TAB 1: REPORTS ---
+        # --- TAB 1: ANALYTICS (The Code 2 Drill-Down) ---
         with tabs[0]:
+            st.header("Drill-Down Analysis")
+            
             if tasks_df.empty:
                 st.info("No data available.")
             else:
-                # Top KPIs
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Total Audits", len(tasks_df), border=True)
-                k2.metric("Total Findings", int(tasks_df['Number of Findings'].sum()), "High Risk", border=True)
-                k3.metric("Transactions Checked", int(tasks_df['Number of Transaction'].sum()), border=True)
-                k4.metric("Branches Covered", tasks_df['Branch'].nunique(), border=True)
-
-                st.markdown("### 🔍 Drill-Down Analysis")
-                st.info("Hierarchy: User → Branch → Task Type")
-
-                # HIERARCHICAL REPORT GENERATION
-                # We group by the specific order requested
-                drill_df = tasks_df.groupby(['Employee', 'Branch', 'Task Description']).agg(
-                    Count=('Task Description', 'count'),
-                    Total_Transactions=('Number of Transaction', 'sum'),
-                    Total_Findings=('Number of Findings', 'sum')
-                )
+                # A. FILTERS (From Code 2)
+                col_filter1, col_filter2, col_filter3 = st.columns(3)
                 
-                # Display as a styled table
-                st.dataframe(
-                    drill_df.style.background_gradient(cmap="Reds", subset=['Total_Findings']), 
-                    use_container_width=True,
-                    height=500
-                )
+                df_filtered = tasks_df.copy()
+                
+                # 1. Date Filter
+                if 'Journal Date' in df_filtered.columns:
+                    all_dates = sorted(df_filtered['Journal Date'].dropna().dt.date.unique())
+                    if all_dates:
+                        selected_date = col_filter1.selectbox("Select Date", all_dates)
+                        df_filtered = df_filtered[df_filtered['Journal Date'].dt.date == selected_date]
 
-                # Export
-                csv = drill_df.to_csv().encode('utf-8')
-                st.download_button("📥 Download Drill-Down Report", csv, "Audit_Hierarchy_Report.csv", "text/csv")
+                # 2. Branch Filter
+                if 'Branch' in df_filtered.columns:
+                    all_branches = df_filtered['Branch'].unique()
+                    selected_branches = col_filter2.multiselect("Filter Branch", all_branches, default=all_branches)
+                    if selected_branches:
+                        df_filtered = df_filtered[df_filtered['Branch'].isin(selected_branches)]
+
+                # 3. Task Filter
+                if 'Task Description' in df_filtered.columns:
+                    all_tasks = df_filtered['Task Description'].unique()
+                    selected_tasks = col_filter3.multiselect("Filter Task", all_tasks, default=all_tasks)
+                    if selected_tasks:
+                        df_filtered = df_filtered[df_filtered['Task Description'].isin(selected_tasks)]
 
                 st.divider()
+
+                # B. METRICS (Dark Cards)
+                tot_trans = df_filtered['Number of Transaction'].sum()
+                tot_find = df_filtered['Number of Findings'].sum()
                 
-                # Visuals
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown("**🚨 Findings by Branch**")
-                    st.bar_chart(tasks_df.groupby('Branch')['Number of Findings'].sum(), color="#ff4b4b")
-                with c2:
-                    st.markdown("**📊 Workload Distribution**")
-                    st.bar_chart(tasks_df['Employee'].value_counts(), color="#4b7bff")
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Total Audits", len(df_filtered))
+                k2.metric("Total Findings", int(tot_find))
+                k3.metric("Transactions", f"{int(tot_trans):,}")
+                k4.metric("Branches", df_filtered['Branch'].nunique())
 
-        # --- TAB 2: EDIT/DELETE ---
+                # C. HIERARCHY TABLE (User -> Branch -> Task)
+                st.subheader("Hierarchy: User → Branch → Task Type")
+                
+                if not df_filtered.empty:
+                    grouped_view = df_filtered.groupby(['Employee', 'Branch', 'Task Description'])[[
+                        'Number of Transaction', 'Number of Findings'
+                    ]].sum().reset_index()
+                    
+                    count_view = df_filtered.groupby(['Employee', 'Branch', 'Task Description']).size().reset_index(name='Count')
+                    
+                    final_table = pd.merge(grouped_view, count_view, on=['Employee', 'Branch', 'Task Description'])
+                    final_table = final_table[['Employee', 'Branch', 'Task Description', 'Count', 'Number of Transaction', 'Number of Findings']]
+                    
+                    st.dataframe(final_table, use_container_width=True)
+                else:
+                    st.warning("No data matches your filters.")
+
+        # --- TAB 2: EDIT/DELETE (From Code 1) ---
         with tabs[1]:
-            st.markdown("#### 🛠️ Manage Records")
-            c_fil1, c_fil2 = st.columns(2)
-            f_status = c_fil1.selectbox("Status Filter", ["Active Only", "All History"])
-            f_branch = c_fil2.selectbox("Branch Filter", ["All"] + BRANCH_OPTIONS)
-
+            st.markdown("#### 🛠️ Edit or Delete Records")
+            f_branch = st.selectbox("Filter by Branch", ["All"] + BRANCH_OPTIONS)
+            
             df_view = tasks_df.copy()
-            if f_status == "Active Only": df_view = df_view[df_view['Completion Status'] != 'Completed']
             if f_branch != "All": df_view = df_view[df_view['Branch'] == f_branch]
 
-            if df_view.empty:
-                st.warning("No records found.")
-            else:
-                for idx, row in df_view.iterrows():
-                    status_icon = "✅" if row['Completion Status'] == 'Completed' else "⏳"
-                    lbl = f"{status_icon} **{row['Employee']}** | {row['Task Description']} @ {row['Branch']}"
-                    
-                    with st.expander(lbl):
-                        with st.form(key=f"adm_edit_{idx}"):
-                            c1, c2, c3 = st.columns(3)
-                            n_trans = c1.number_input("Transactions", value=int(row['Number of Transaction']))
-                            n_find = c2.number_input("Findings", value=int(row['Number of Findings']))
-                            
-                            c_act1, c_act2 = st.columns(2)
-                            is_save = c_act1.form_submit_button("💾 Update Data")
-                            is_del = c_act2.form_submit_button("🗑️ DELETE Task", type="primary")
+            for idx, row in df_view.iterrows():
+                status_icon = "✅" if row['Completion Status'] == 'Completed' else "⏳"
+                lbl = f"{status_icon} **{row['Employee']}** | {row['Task Description']} @ {row['Branch']}"
+                
+                with st.expander(lbl):
+                    with st.form(key=f"adm_edit_{idx}"):
+                        c1, c2 = st.columns(2)
+                        n_trans = c1.number_input("Transactions", value=int(row['Number of Transaction']))
+                        n_find = c2.number_input("Findings", value=int(row['Number of Findings']))
+                        
+                        c_act1, c_act2 = st.columns(2)
+                        if c_act1.form_submit_button("💾 Update"):
+                            tasks_df.at[idx, 'Number of Transaction'] = n_trans
+                            tasks_df.at[idx, 'Number of Findings'] = n_find
+                            update_data(conn, tasks_df, "Tasks")
+                            st.success("Updated!")
+                            st.rerun()
+                        
+                        if c_act2.form_submit_button("🗑️ DELETE", type="primary"):
+                            tasks_df = tasks_df.drop(idx)
+                            update_data(conn, tasks_df, "Tasks")
+                            st.warning("Deleted!")
+                            st.rerun()
 
-                            if is_save:
-                                tasks_df.at[idx, 'Number of Transaction'] = n_trans
-                                tasks_df.at[idx, 'Number of Findings'] = n_find
-                                update_data(conn, tasks_df, "Tasks")
-                                st.success("Updated!")
-                                st.rerun()
-                            
-                            if is_del:
-                                tasks_df = tasks_df.drop(idx)
-                                update_data(conn, tasks_df, "Tasks")
-                                st.warning("Deleted!")
-                                st.rerun()
-
-        # --- TAB 3: ASSIGN ---
+        # --- TAB 3: ASSIGN (From Code 1) ---
         with tabs[2]:
             st.markdown("#### ➕ Assign New Audit")
             with st.form("admin_assign"):
@@ -242,8 +243,19 @@ def main():
                     st.success("Assigned!")
                     st.rerun()
 
-        # --- TAB 4: USERS ---
+        # --- TAB 4: SQL TOOL (From Code 2) ---
         with tabs[3]:
+            st.header("SQL Query Tool")
+            st.markdown("Use `tasks_df` as your table name.")
+            query = st.text_area("SQL Code", value='SELECT Branch, SUM("Number of Transaction") FROM tasks_df GROUP BY Branch', height=100)
+            if st.button("Run Query"):
+                try:
+                    st.dataframe(duckdb.query(query).to_df(), use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        # --- TAB 5: USERS (From Code 1) ---
+        with tabs[4]:
             st.markdown("#### 👥 User Directory")
             c1, c2 = st.columns(2)
             with c1:
@@ -262,31 +274,30 @@ def main():
                 st.dataframe(users_df[['Username', 'Role']], hide_index=True, use_container_width=True)
 
     # ==========================================
-    # ROLE: USER VIEW
+    # ROLE: USER VIEW (From Code 1)
     # ==========================================
     else:
-        # --- TAB 1: DASHBOARD ---
-        with tabs[0]:
+        st.title("✅ My Audit Space")
+        u_tabs = st.tabs(["🏠 Dashboard", "⚡ Active Tasks", "➕ New Log"])
+
+        with u_tabs[0]:
             if not tasks_df.empty:
                 my_df = tasks_df[tasks_df['Employee'] == user['Username']]
                 if not my_df.empty:
                     c1, c2 = st.columns(2)
                     c1.metric("Tasks Completed", len(my_df[my_df['Completion Status']=='Completed']))
                     c2.metric("Pending", len(my_df[my_df['Completion Status']!='Completed']))
-                    st.bar_chart(my_df['Task Description'].value_counts())
                 else: st.info("No activity yet.")
 
-        # --- TAB 2: ACTIVE TASKS ---
-        with tabs[1]:
+        with u_tabs[1]:
             mask = (tasks_df['Completion Status'] != 'Completed') & (tasks_df['Employee'] == user['Username'])
             active = tasks_df[mask].copy()
             
             if active.empty:
-                st.success("🎉 All caught up! No pending tasks.")
+                st.success("🎉 All caught up!")
             else:
                 for idx, row in active.iterrows():
                     with st.expander(f"📌 {row['Task Description']} @ {row['Branch']}", expanded=True):
-                        st.caption(f"Started: {row['Assigned Time']}")
                         with st.form(key=f"u_act_{idx}"):
                             c1, c2 = st.columns(2)
                             nt = c1.number_input("Transactions", value=int(row['Number of Transaction']))
@@ -309,8 +320,7 @@ def main():
                                 st.balloons()
                                 st.rerun()
 
-        # --- TAB 3: NEW LOG ---
-        with tabs[2]:
+        with u_tabs[2]:
             st.markdown("#### ⚡ Quick Log")
             with st.form("u_new"):
                 c1, c2 = st.columns(2)
