@@ -1,4 +1,6 @@
 streamlit
 pandas
+duckdb
+streamlit-gsheets
 st-gsheets-connection
 matplotlib
