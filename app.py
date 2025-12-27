@@ -52,10 +52,20 @@ def get_data():
 
 def update_data(conn, df, worksheet_name):
     try:
+        # 1. CLEANING: Replace "NaN" (empty math values) with 0 or empty string
+        # This prevents Google API errors
+        df = df.fillna("") 
+        
+        # 2. WRITING: Send data to Google
         conn.update(worksheet=worksheet_name, data=df)
+        
+        # 3. RESETTING: Clear the memory so the app sees the new data immediately
         st.cache_data.clear()
+        
+        return True
     except Exception as e:
-        st.error(f"Could not save: {e}")
+        st.error(f"⚠️ Save Error: {e}")
+        return False
 
 def calculate_duration(start_date, start_time, end_date, end_time):
     try:
@@ -216,17 +226,27 @@ def main():
                 brn = c2.selectbox("Branch", BRANCH_OPTIONS)
                 typ = c1.selectbox("Task", TASK_OPTIONS)
                 jdt = c2.date_input("Journal Date")
-                if st.form_submit_button("🚀 Assign Now", type="primary"):
+               if st.form_submit_button("🚀 Assign Now", type="primary"):
                     now = datetime.now()
                     new_row = {
                         'Employee': tgt, 'Task Description': typ, 'Branch': brn,
-                        'Assigned Date': now.strftime('%d/%b/%Y'), 'Assigned Time': now.strftime('%I:%M:%S %p'),
+                        'Assigned Date': now.strftime('%d/%b/%Y'), 
+                        'Assigned Time': now.strftime('%I:%M:%S %p'),
                         'Journal Date': jdt.strftime('%d/%b/%Y'),
-                        'Number of Transaction': 0, 'Number of Findings': 0, 'Completion Status': 'In Progress'
+                        'Number of Transaction': 0, 
+                        'Number of Findings': 0, 
+                        'Completion Status': 'In Progress'
                     }
-                    update_data(conn, pd.concat([tasks_df, pd.DataFrame([new_row])], ignore_index=True), "Tasks")
-                    st.success("Assigned!")
-                    st.rerun()
+                    
+                    # Create new dataframe with the new row
+                    updated_df = pd.concat([tasks_df, pd.DataFrame([new_row])], ignore_index=True)
+                    
+                    # Use the new safe update function
+                    if update_data(conn, updated_df, "Tasks"):
+                        st.success("✅ Task Assigned Successfully!")
+                        import time
+                        time.sleep(1) # Give Google a second to process
+                        st.rerun()
 
         # --- TAB 4: SQL TOOL ---
         with tabs[3]:
@@ -374,17 +394,25 @@ def main():
                 br = c1.selectbox("Branch", BRANCH_OPTIONS)
                 ty = c2.selectbox("Task", TASK_OPTIONS)
                 jd = c1.date_input("Journal Date")
-                if st.form_submit_button("Start Timer", type="primary"):
+               if st.form_submit_button("Start Timer", type="primary"):
                     now = datetime.now()
                     new_r = {
                         'Employee': user['Username'], 'Task Description': ty, 'Branch': br,
-                        'Assigned Date': now.strftime('%d/%b/%Y'), 'Assigned Time': now.strftime('%I:%M:%S %p'),
+                        'Assigned Date': now.strftime('%d/%b/%Y'), 
+                        'Assigned Time': now.strftime('%I:%M:%S %p'),
                         'Journal Date': jd.strftime('%d/%b/%Y'),
-                        'Number of Transaction': 0, 'Number of Findings': 0, 'Completion Status': 'In Progress'
+                        'Number of Transaction': 0, 
+                        'Number of Findings': 0, 
+                        'Completion Status': 'In Progress'
                     }
-                    update_data(conn, pd.concat([tasks_df, pd.DataFrame([new_r])], ignore_index=True), "Tasks")
-                    st.success("Started!")
-                    st.rerun()
+                    
+                    updated_df = pd.concat([tasks_df, pd.DataFrame([new_r])], ignore_index=True)
+                    
+                    if update_data(conn, updated_df, "Tasks"):
+                        st.success("✅ Timer Started!")
+                        import time
+                        time.sleep(1)
+                        st.rerun()
 
 if __name__ == "__main__":
     main()
