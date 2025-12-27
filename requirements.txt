@@ -2,4 +2,4 @@ streamlit
 pandas
 duckdb
 streamlit-gsheets
-matplotlib
+openpyxl
