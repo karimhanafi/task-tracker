@@ -1,5 +1,4 @@
-streamlit==1.32.0
-pandas==2.1.4
-duckdb==0.9.2
-streamlit-gsheets==0.1.0
-openpyxl==3.1.2
+streamlit
+pandas
+streamlit-gsheets
+openpyxl
