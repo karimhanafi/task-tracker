@@ -25,7 +25,7 @@ st.markdown("""
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
     }
     div[data-testid="stExpander"] {
-        background-color: white;
+        background-color: #262730;
         border-radius: 10px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
