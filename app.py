@@ -43,33 +43,37 @@ def get_data():
     """Reads data from Google Sheets with caching and error handling."""
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        # ttl=10 prevents hitting Google's rate limit too fast
         tasks_df = conn.read(worksheet="Tasks", ttl=10)
         users_df = conn.read(worksheet="Users", ttl=10)
         
         if tasks_df is None: tasks_df = pd.DataFrame()
         if users_df is None: users_df = pd.DataFrame()
         
-        # Ensure standard columns exist
-        cols_needed = ['Number of Findings', 'Number of Transaction', 'Branch', 'Employee', 'Completion Status', 'Assigned Date', 'Assigned Time', 'Journal Date', 'Task Description']
+        # Ensure standard columns exist (Matching your sheet headers EXACTLY)
+        # Note: 'Number of Transaction' (Singular based on your screenshot)
+        cols_needed = [
+            'Employee', 'Task Description', 'Branch', 'Assigned Date', 'Assigned Time',
+            'Completion Status', 'Completion Date', 'Completion Time', 'Duration', 'Progress %',
+            'Journal Date', 'Number of Findings', 'Number of Transaction'
+        ]
+        
         for col in cols_needed:
             if col not in tasks_df.columns: tasks_df[col] = 0
             
         return conn, tasks_df, users_df
     except Exception as e:
-        # Return empty dataframes if connection fails so app doesn't crash immediately
         return conn, pd.DataFrame(), pd.DataFrame()
 
 def update_data(conn, df, worksheet_name):
-    """Safely updates Google Sheets and clears cache to show changes immediately."""
+    """Safely updates Google Sheets and clears cache."""
     try:
-        # 1. CLEANING: Replace "NaN" with empty string to prevent Google errors
+        # 1. CLEANING: Replace "NaN" with empty string
         df = df.fillna("") 
         
         # 2. WRITING: Send data to Google
         conn.update(worksheet=worksheet_name, data=df)
         
-        # 3. RESETTING: Clear memory so the new data appears instantly
+        # 3. RESETTING: Clear memory
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -98,7 +102,6 @@ def main():
 
     conn, tasks_df, users_df = get_data()
 
-    # Safety Check: If Google Quota is hit, users_df might be empty. Stop here.
     if users_df.empty:
         st.warning("⚠️ **System is cooling down.**")
         st.info("Please wait **60 seconds** and refresh the page to reset the Google Quota.")
@@ -109,8 +112,12 @@ def main():
     users_df['Password'] = users_df['Password'].astype(str)
     
     if not tasks_df.empty:
-        tasks_df['Number of Findings'] = pd.to_numeric(tasks_df['Number of Findings'], errors='coerce').fillna(0)
-        tasks_df['Number of Transaction'] = pd.to_numeric(tasks_df['Number of Transaction'], errors='coerce').fillna(0)
+        # Match column names exactly from your sheet
+        if 'Number of Findings' in tasks_df.columns:
+            tasks_df['Number of Findings'] = pd.to_numeric(tasks_df['Number of Findings'], errors='coerce').fillna(0)
+        if 'Number of Transaction' in tasks_df.columns:
+            tasks_df['Number of Transaction'] = pd.to_numeric(tasks_df['Number of Transaction'], errors='coerce').fillna(0)
+        
         # Parse Dates
         if 'Journal Date' in tasks_df.columns:
             tasks_df['Journal Date'] = pd.to_datetime(tasks_df['Journal Date'], format='%d/%b/%Y', errors='coerce')
@@ -152,17 +159,17 @@ def main():
         st.title("📊 Executive Dashboard")
         tabs = st.tabs(["📈 Analytics", "📝 Manage Tasks", "➕ Assign Task", "💻 SQL Tool", "👥 User Mgmt", "📑 Custom Report"])
 
-        # --- TAB 1: ANALYTICS (Added Assigned Date Filter) ---
+        # --- TAB 1: ANALYTICS (With Employee Filter & Select All) ---
         with tabs[0]:
             st.header("Drill-Down Analysis")
             if tasks_df.empty:
                 st.info("No data available.")
             else:
-                # Updated to 4 columns to fit the new filter
-                col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+                # 5 columns for filters
+                col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
                 df_filtered = tasks_df.copy()
                 
-                # 1. Journal Date Filter
+                # 1. Journal Date
                 with col_f1:
                     if 'Journal Date' in df_filtered.columns:
                         all_j_dates = sorted(df_filtered['Journal Date'].dropna().dt.date.unique())
@@ -170,7 +177,7 @@ def main():
                             sel_j_date = st.selectbox("Journal Date", all_j_dates)
                             df_filtered = df_filtered[df_filtered['Journal Date'].dt.date == sel_j_date]
 
-                # 2. Assigned Date Filter (NEW REQUEST)
+                # 2. Assigned Date
                 with col_f2:
                     if 'Assigned Date' in df_filtered.columns:
                         all_a_dates = sorted(df_filtered['Assigned Date'].dropna().dt.date.unique())
@@ -178,27 +185,35 @@ def main():
                             sel_a_date = st.selectbox("Assigned Date", all_a_dates)
                             df_filtered = df_filtered[df_filtered['Assigned Date'].dt.date == sel_a_date]
 
-                # 3. Branch Filter
+                # 3. Branch (Default: All Selected)
                 with col_f3:
                     if 'Branch' in df_filtered.columns:
-                        all_branches = df_filtered['Branch'].unique()
+                        all_branches = list(df_filtered['Branch'].unique())
                         sel_branches = st.multiselect("Branch", all_branches, default=all_branches)
                         if sel_branches:
                             df_filtered = df_filtered[df_filtered['Branch'].isin(sel_branches)]
 
-                # 4. Task Filter
+                # 4. Task (Default: All Selected)
                 with col_f4:
                     if 'Task Description' in df_filtered.columns:
-                        all_tasks = df_filtered['Task Description'].unique()
+                        all_tasks = list(df_filtered['Task Description'].unique())
                         sel_tasks = st.multiselect("Task", all_tasks, default=all_tasks)
                         if sel_tasks:
                             df_filtered = df_filtered[df_filtered['Task Description'].isin(sel_tasks)]
 
+                # 5. Employee (Default: All Selected) - NEW ADDITION
+                with col_f5:
+                    if 'Employee' in df_filtered.columns:
+                        all_emps = list(df_filtered['Employee'].unique())
+                        sel_emps = st.multiselect("Employee", all_emps, default=all_emps)
+                        if sel_emps:
+                            df_filtered = df_filtered[df_filtered['Employee'].isin(sel_emps)]
+
                 st.divider()
                 
                 # Cards
-                tot_trans = df_filtered['Number of Transaction'].sum()
-                tot_find = df_filtered['Number of Findings'].sum()
+                tot_trans = df_filtered['Number of Transaction'].sum() if 'Number of Transaction' in df_filtered.columns else 0
+                tot_find = df_filtered['Number of Findings'].sum() if 'Number of Findings' in df_filtered.columns else 0
                 
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("Total Audits", len(df_filtered))
@@ -209,13 +224,19 @@ def main():
                 # Table
                 st.subheader("Hierarchy: User → Branch → Task Type")
                 if not df_filtered.empty:
-                    grouped_view = df_filtered.groupby(['Employee', 'Branch', 'Task Description'])[[
-                        'Number of Transaction', 'Number of Findings'
-                    ]].sum().reset_index()
-                    count_view = df_filtered.groupby(['Employee', 'Branch', 'Task Description']).size().reset_index(name='Count')
-                    final_table = pd.merge(grouped_view, count_view, on=['Employee', 'Branch', 'Task Description'])
-                    final_table = final_table[['Employee', 'Branch', 'Task Description', 'Count', 'Number of Transaction', 'Number of Findings']]
-                    st.dataframe(final_table, use_container_width=True)
+                    # Grouping Logic
+                    cols_to_group = ['Employee', 'Branch', 'Task Description']
+                    cols_to_sum = ['Number of Transaction', 'Number of Findings']
+                    
+                    # Ensure columns exist before grouping
+                    available_group_cols = [c for c in cols_to_group if c in df_filtered.columns]
+                    available_sum_cols = [c for c in cols_to_sum if c in df_filtered.columns]
+                    
+                    if available_group_cols:
+                        grouped_view = df_filtered.groupby(available_group_cols)[available_sum_cols].sum().reset_index()
+                        count_view = df_filtered.groupby(available_group_cols).size().reset_index(name='Count')
+                        final_table = pd.merge(grouped_view, count_view, on=available_group_cols)
+                        st.dataframe(final_table, use_container_width=True)
 
         # --- TAB 2: EDIT/DELETE ---
         with tabs[1]:
@@ -239,14 +260,14 @@ def main():
                             tasks_df.at[idx, 'Number of Findings'] = n_find
                             if update_data(conn, tasks_df, "Tasks"):
                                 st.success("Updated!")
-                                time.sleep(5) # WAIT 5 SECONDS
+                                time.sleep(5)
                                 st.rerun()
                                 
                         if c_act2.form_submit_button("🗑️ DELETE", type="primary"):
                             tasks_df = tasks_df.drop(idx)
                             if update_data(conn, tasks_df, "Tasks"):
                                 st.warning("Deleted!")
-                                time.sleep(5) # WAIT 5 SECONDS
+                                time.sleep(5)
                                 st.rerun()
 
         # --- TAB 3: ASSIGN NEW TASK ---
@@ -261,20 +282,30 @@ def main():
                 
                 if st.form_submit_button("🚀 Assign Now", type="primary"):
                     now = datetime.now()
+                    # CRITICAL FIX: EXACT COLUMN NAMES
                     new_row = {
-                        'Employee': tgt, 'Task Description': typ, 'Branch': brn,
+                        'Employee': tgt, 
+                        'Task Description': typ, 
+                        'Branch': brn,
                         'Assigned Date': now.strftime('%d/%b/%Y'), 
                         'Assigned Time': now.strftime('%I:%M:%S %p'),
                         'Journal Date': jdt.strftime('%d/%b/%Y'),
                         'Number of Transaction': 0, 
                         'Number of Findings': 0, 
-                        'Completion Status': 'In Progress'
+                        'Completion Status': 'In Progress',
+                        'Completion Date': '',
+                        'Completion Time': '',
+                        'Duration': '',
+                        'Progress %': ''
                     }
                     
-                    updated_df = pd.concat([tasks_df, pd.DataFrame([new_row])], ignore_index=True)
+                    # Create DataFrame with exact headers
+                    new_df = pd.DataFrame([new_row])
+                    updated_df = pd.concat([tasks_df, new_df], ignore_index=True)
+                    
                     if update_data(conn, updated_df, "Tasks"):
-                        st.success("✅ Task Assigned Successfully! Waiting 5 seconds...")
-                        time.sleep(5) # WAIT 5 SECONDS
+                        st.success("✅ Task Assigned! Waiting 5 seconds...")
+                        time.sleep(5)
                         st.rerun()
 
         # --- TAB 4: SQL TOOL ---
@@ -285,6 +316,7 @@ def main():
             if st.button("Run SQL"):
                 try:
                     sql_conn = sqlite3.connect(':memory:')
+                    # Fix column names for SQL (remove spaces if needed or quote them)
                     tasks_df.to_sql('df', sql_conn, index=False, if_exists='replace')
                     result = pd.read_sql_query(query, sql_conn)
                     st.dataframe(result, use_container_width=True)
@@ -305,13 +337,13 @@ def main():
                             new_u = pd.DataFrame([{'Username': nu, 'Password': np, 'Role': nr}])
                             if update_data(conn, pd.concat([users_df, new_u], ignore_index=True), "Users"):
                                 st.success("User Created")
-                                time.sleep(1) # Short wait for users is usually fine, but safe to keep
+                                time.sleep(5)
                                 st.rerun()
                         else: st.error("User exists")
             with c2:
                 st.dataframe(users_df[['Username', 'Role']], hide_index=True, use_container_width=True)
 
-        # --- TAB 6: CUSTOM REPORT (Fixed Columns) ---
+        # --- TAB 6: CUSTOM REPORT ---
         with tabs[5]:
             st.header("📑 Generate Custom Report")
             with st.expander("🔻 Report Filters (Click to Open)", expanded=True):
@@ -348,9 +380,8 @@ def main():
                 if use_status:
                     report_df = report_df[report_df['Completion Status'] == r_status]
 
-                # --- NEW: FILTER SPECIFIC COLUMNS ONLY ---
+                # Filter specific columns
                 target_cols = ['Employee', 'Task Description', 'Branch', 'Assigned Date', 'Completion Status', 'Journal Date', 'Number of Transaction', 'Number of Findings']
-                # Only keep columns that actually exist in the data to prevent crashes
                 final_cols = [c for c in target_cols if c in report_df.columns]
                 report_df = report_df[final_cols]
 
@@ -403,7 +434,7 @@ def main():
                                 
                                 if update_data(conn, tasks_df, "Tasks"):
                                     st.balloons()
-                                    time.sleep(5) # WAIT 5 SECONDS
+                                    time.sleep(5)
                                     st.rerun()
 
         with u_tabs[2]:
@@ -423,13 +454,18 @@ def main():
                         'Journal Date': jd.strftime('%d/%b/%Y'),
                         'Number of Transaction': 0, 
                         'Number of Findings': 0, 
-                        'Completion Status': 'In Progress'
+                        'Completion Status': 'In Progress',
+                        'Completion Date': '',
+                        'Completion Time': '',
+                        'Duration': '',
+                        'Progress %': ''
                     }
                     
-                    updated_df = pd.concat([tasks_df, pd.DataFrame([new_r])], ignore_index=True)
+                    new_df = pd.DataFrame([new_r])
+                    updated_df = pd.concat([tasks_df, new_df], ignore_index=True)
                     if update_data(conn, updated_df, "Tasks"):
                         st.success("Started! Waiting 5 seconds...")
-                        time.sleep(5) # WAIT 5 SECONDS
+                        time.sleep(5)
                         st.rerun()
 
 if __name__ == "__main__":
