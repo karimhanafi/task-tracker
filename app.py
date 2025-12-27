@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import time
-import pytz # For Egypt Time
+import pytz
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
@@ -11,7 +11,6 @@ st.set_page_config(page_title="IC Audit Pro", layout="wide", page_icon="🛡️"
 
 st.markdown("""
 <style>
-    /* Dark Mode Card Styling */
     div[data-testid="metric-container"] {
         background-color: #262730 !important;
         border: 1px solid #464b5c !important;
@@ -38,7 +37,6 @@ EGYPT_TZ = pytz.timezone('Africa/Cairo')
 # --- 3. DATABASE FUNCTIONS ---
 
 def get_current_time():
-    """Returns current time in Egypt Timezone."""
     return datetime.now(EGYPT_TZ)
 
 def get_data():
@@ -50,11 +48,13 @@ def get_data():
         if tasks_df is None: tasks_df = pd.DataFrame()
         if users_df is None: users_df = pd.DataFrame()
         
+        # EXACT COLUMN NAMES FROM YOUR REQUEST
         cols_needed = [
-            'Employee', 'Task Description', 'Branch', 'Assigned Date', 'Assigned Time',
-            'Completion Status', 'Completion Date', 'Completion Time', 'Duration', 'Progress %',
-            'Journal Date', 'Number of Findings', 'Number of Transaction'
+            "Employee", "Task Description", "Branch", "Assigned Date", "Assigned Time",
+            "Completion Status", "Completion Date", "Completion Time", "Duration", "Progress %",
+            "Journal Date", "Number of Findings", "Number of Transaction"
         ]
+        
         for col in cols_needed:
             if col not in tasks_df.columns: tasks_df[col] = ""
             
@@ -64,15 +64,17 @@ def get_data():
 
 def update_data(conn, df, worksheet_name):
     try:
-        # FORCE FORMATTING: Ensure Dates are saved as DD/MMM/YYYY String to prevent Sheet corruption
+        # STRICT DATE FORMATTING: Force dates to string '27/Dec/2025'
         date_cols = ['Assigned Date', 'Completion Date', 'Journal Date']
         for col in date_cols:
             if col in df.columns:
-                # If it's a datetime object, convert to String '27/Dec/2025'
-                # If it's already a string, keep it.
+                # Convert to datetime, then format as string, then fill NaNs
+                # This ensures we send "27/Dec/2025" as TEXT to Google Sheets
                 df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%b/%Y').fillna(df[col])
 
+        # Clean NaN values
         df = df.fillna("") 
+        
         conn.update(worksheet=worksheet_name, data=df)
         st.cache_data.clear()
         return True
@@ -80,38 +82,35 @@ def update_data(conn, df, worksheet_name):
         st.error(f"⚠️ Save Error: {e}")
         return False
 
-# --- FIXED CALCULATION LOGIC ---
 def calculate_duration(start_date, start_time, end_date, end_time):
     try:
-        # 1. Handle Start Date (Can be Timestamp OR String)
-        if isinstance(start_date, pd.Timestamp) or isinstance(start_date, datetime):
+        # Robust Parsing: Handle both String ('27/Dec/2025') and Timestamp inputs
+        if isinstance(start_date, (pd.Timestamp, datetime)):
             s_date = start_date
         else:
             s_date = datetime.strptime(str(start_date), '%d/%b/%Y')
 
-        # 2. Handle End Date (Usually String, but be safe)
-        if isinstance(end_date, pd.Timestamp) or isinstance(end_date, datetime):
+        if isinstance(end_date, (pd.Timestamp, datetime)):
             e_date = end_date
         else:
             e_date = datetime.strptime(str(end_date), '%d/%b/%Y')
 
-        # 3. Parse Times (e.g., "10:30:00 AM")
-        s_time_obj = datetime.strptime(str(start_time), '%I:%M:%S %p').time()
-        e_time_obj = datetime.strptime(str(end_time), '%I:%M:%S %p').time()
+        # Clean time strings (remove potential extra spaces)
+        s_time_str = str(start_time).strip()
+        e_time_str = str(end_time).strip()
         
-        # 4. Combine to Full Datetime
-        dt_start = datetime.combine(s_date.date(), s_time_obj)
-        dt_end = datetime.combine(e_date.date(), e_time_obj)
+        if len(s_time_str.split(':')) == 2: s_time_str += ":00"
+        if len(e_time_str.split(':')) == 2: e_time_str += ":00"
+
+        dt_start = datetime.combine(s_date.date(), datetime.strptime(s_time_str, '%I:%M:%S %p').time())
+        dt_end = datetime.combine(e_date.date(), datetime.strptime(e_time_str, '%I:%M:%S %p').time())
         
-        # 5. Calculate Difference
         diff = dt_end - dt_start
         secs = diff.total_seconds()
         
         if secs < 0: return "0h 0m"
         return f"{int(secs // 3600)}h {int((secs % 3600) // 60)}m"
-    except Exception as e:
-        # If anything fails, return 0h 0m instead of crashing
-        return "0h 0m"
+    except: return "0h 0m"
 
 # --- 4. MAIN APPLICATION ---
 def main():
@@ -123,25 +122,24 @@ def main():
 
     if users_df.empty:
         st.warning("⚠️ **System is cooling down.**")
-        st.info("Please wait **60 seconds** and refresh the page to reset the Google Quota.")
+        st.info("Please wait **60 seconds** and refresh the page.")
         st.stop() 
 
     users_df['Username'] = users_df['Username'].astype(str)
     users_df['Password'] = users_df['Password'].astype(str)
     
-    # Logic DataFrame (with Real Dates for Filtering)
+    # LOGIC DF: Create a copy for filtering that uses real Date Objects
     tasks_df_logic = tasks_df.copy()
     if not tasks_df_logic.empty:
-        if 'Number of Findings' in tasks_df_logic.columns:
-            tasks_df_logic['Number of Findings'] = pd.to_numeric(tasks_df_logic['Number of Findings'], errors='coerce').fillna(0)
-        if 'Number of Transaction' in tasks_df_logic.columns:
-            tasks_df_logic['Number of Transaction'] = pd.to_numeric(tasks_df_logic['Number of Transaction'], errors='coerce').fillna(0)
+        # Numeric conversion
+        for col in ['Number of Findings', 'Number of Transaction']:
+            if col in tasks_df_logic.columns:
+                tasks_df_logic[col] = pd.to_numeric(tasks_df_logic[col], errors='coerce').fillna(0)
         
-        # Parse Dates for Filtering Logic
-        if 'Journal Date' in tasks_df_logic.columns:
-            tasks_df_logic['Journal Date'] = pd.to_datetime(tasks_df_logic['Journal Date'], format='%d/%b/%Y', errors='coerce')
-        if 'Assigned Date' in tasks_df_logic.columns:
-            tasks_df_logic['Assigned Date'] = pd.to_datetime(tasks_df_logic['Assigned Date'], format='%d/%b/%Y', errors='coerce')
+        # Date conversion (for filtering logic only)
+        for col in ['Journal Date', 'Assigned Date']:
+            if col in tasks_df_logic.columns:
+                tasks_df_logic[col] = pd.to_datetime(tasks_df_logic[col], format='%d/%b/%Y', errors='coerce')
 
     # --- LOGIN ---
     if not st.session_state.logged_in:
@@ -185,53 +183,51 @@ def main():
                 df_filtered = tasks_df_logic.copy()
                 
                 with col_f1:
-                    if 'Journal Date' in df_filtered.columns:
-                        all_j_dates = sorted(df_filtered['Journal Date'].dropna().dt.date.unique())
-                        if all_j_dates:
-                            sel_j_date = st.selectbox("Journal Date", all_j_dates)
-                            df_filtered = df_filtered[df_filtered['Journal Date'].dt.date == sel_j_date]
-
+                    all_j = sorted(df_filtered['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in df_filtered else []
+                    if all_j: 
+                        sel_j = st.selectbox("Journal Date", all_j)
+                        df_filtered = df_filtered[df_filtered['Journal Date'].dt.date == sel_j]
+                
                 with col_f2:
-                    if 'Assigned Date' in df_filtered.columns:
-                        all_a_dates = sorted(df_filtered['Assigned Date'].dropna().dt.date.unique())
-                        if all_a_dates:
-                            sel_a_date = st.selectbox("Assigned Date", all_a_dates)
-                            df_filtered = df_filtered[df_filtered['Assigned Date'].dt.date == sel_a_date]
+                    all_a = sorted(df_filtered['Assigned Date'].dropna().dt.date.unique()) if 'Assigned Date' in df_filtered else []
+                    if all_a: 
+                        sel_a = st.selectbox("Assigned Date", all_a)
+                        df_filtered = df_filtered[df_filtered['Assigned Date'].dt.date == sel_a]
 
                 with col_f3:
-                    all_branches = list(df_filtered['Branch'].unique()) if 'Branch' in df_filtered.columns else []
-                    sel_branches = st.multiselect("Branch", all_branches, default=all_branches)
-                    if sel_branches: df_filtered = df_filtered[df_filtered['Branch'].isin(sel_branches)]
+                    all_b = list(df_filtered['Branch'].unique()) if 'Branch' in df_filtered else []
+                    sel_b = st.multiselect("Branch", all_b, default=all_b)
+                    if sel_b: df_filtered = df_filtered[df_filtered['Branch'].isin(sel_b)]
 
                 with col_f4:
-                    all_tasks = list(df_filtered['Task Description'].unique()) if 'Task Description' in df_filtered.columns else []
-                    sel_tasks = st.multiselect("Task", all_tasks, default=all_tasks)
-                    if sel_tasks: df_filtered = df_filtered[df_filtered['Task Description'].isin(sel_tasks)]
+                    all_t = list(df_filtered['Task Description'].unique()) if 'Task Description' in df_filtered else []
+                    sel_t = st.multiselect("Task", all_t, default=all_t)
+                    if sel_t: df_filtered = df_filtered[df_filtered['Task Description'].isin(sel_t)]
 
                 with col_f5:
-                    all_emps = list(df_filtered['Employee'].unique()) if 'Employee' in df_filtered.columns else []
-                    sel_emps = st.multiselect("Employee", all_emps, default=all_emps)
-                    if sel_emps: df_filtered = df_filtered[df_filtered['Employee'].isin(sel_emps)]
+                    all_e = list(df_filtered['Employee'].unique()) if 'Employee' in df_filtered else []
+                    sel_e = st.multiselect("Employee", all_e, default=all_e)
+                    if sel_e: df_filtered = df_filtered[df_filtered['Employee'].isin(sel_e)]
 
                 st.divider()
-                tot_trans = df_filtered['Number of Transaction'].sum() if 'Number of Transaction' in df_filtered.columns else 0
-                tot_find = df_filtered['Number of Findings'].sum() if 'Number of Findings' in df_filtered.columns else 0
+                tot_trans = df_filtered['Number of Transaction'].sum() if 'Number of Transaction' in df_filtered else 0
+                tot_find = df_filtered['Number of Findings'].sum() if 'Number of Findings' in df_filtered else 0
                 
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("Total Audits", len(df_filtered))
                 k2.metric("Total Findings", int(tot_find))
                 k3.metric("Transactions", f"{int(tot_trans):,}")
-                k4.metric("Branches", df_filtered['Branch'].nunique() if 'Branch' in df_filtered.columns else 0)
+                k4.metric("Branches", df_filtered['Branch'].nunique() if 'Branch' in df_filtered else 0)
 
                 st.subheader("Hierarchy: User → Branch → Task Type")
                 if not df_filtered.empty:
-                    cols_to_group = ['Employee', 'Branch', 'Task Description']
-                    cols_to_sum = ['Number of Transaction', 'Number of Findings']
-                    available_group = [c for c in cols_to_group if c in df_filtered.columns]
-                    if available_group:
-                        grouped = df_filtered.groupby(available_group)[cols_to_sum].sum().reset_index()
-                        count = df_filtered.groupby(available_group).size().reset_index(name='Count')
-                        final = pd.merge(grouped, count, on=available_group)
+                    grp = ['Employee', 'Branch', 'Task Description']
+                    sums = ['Number of Transaction', 'Number of Findings']
+                    avail_grp = [c for c in grp if c in df_filtered]
+                    if avail_grp:
+                        grouped = df_filtered.groupby(avail_grp)[sums].sum().reset_index()
+                        count = df_filtered.groupby(avail_grp).size().reset_index(name='Count')
+                        final = pd.merge(grouped, count, on=avail_grp)
                         st.dataframe(final, use_container_width=True)
 
         # TAB 2: Edit
@@ -242,31 +238,30 @@ def main():
             if f_branch != "All": df_view = df_view[df_view['Branch'] == f_branch]
 
             for idx, row in df_view.iterrows():
-                status_icon = "✅" if row['Completion Status'] == 'Completed' else "⏳"
-                lbl = f"{status_icon} **{row['Employee']}** | {row['Task Description']} @ {row['Branch']}"
+                icon = "✅" if row['Completion Status'] == 'Completed' else "⏳"
+                lbl = f"{icon} **{row['Employee']}** | {row['Task Description']} @ {row['Branch']}"
                 with st.expander(lbl):
                     with st.form(key=f"adm_edit_{idx}"):
                         c1, c2 = st.columns(2)
-                        val_trans = int(float(row['Number of Transaction'])) if row['Number of Transaction']!='' else 0
-                        val_find = int(float(row['Number of Findings'])) if row['Number of Findings']!='' else 0
+                        # Safe numeric conversion for input
+                        try: vt = int(float(row['Number of Transaction'])) if row['Number of Transaction']!='' else 0
+                        except: vt = 0
+                        try: vf = int(float(row['Number of Findings'])) if row['Number of Findings']!='' else 0
+                        except: vf = 0
                         
-                        n_trans = c1.number_input("Transactions", value=val_trans)
-                        n_find = c2.number_input("Findings", value=val_find)
-                        
+                        nt = c1.number_input("Transactions", value=vt)
+                        nf = c2.number_input("Findings", value=vf)
                         c_act1, c_act2 = st.columns(2)
+                        
                         if c_act1.form_submit_button("💾 Update"):
-                            tasks_df.at[idx, 'Number of Transaction'] = n_trans
-                            tasks_df.at[idx, 'Number of Findings'] = n_find
+                            tasks_df.at[idx, 'Number of Transaction'] = nt
+                            tasks_df.at[idx, 'Number of Findings'] = nf
                             if update_data(conn, tasks_df, "Tasks"):
-                                st.success("Updated!")
-                                time.sleep(5)
-                                st.rerun()
+                                st.success("Updated!"); time.sleep(5); st.rerun()
                         if c_act2.form_submit_button("🗑️ DELETE", type="primary"):
                             tasks_df = tasks_df.drop(idx)
                             if update_data(conn, tasks_df, "Tasks"):
-                                st.warning("Deleted!")
-                                time.sleep(5)
-                                st.rerun()
+                                st.warning("Deleted!"); time.sleep(5); st.rerun()
 
         # TAB 3: Assign
         with tabs[2]:
@@ -282,28 +277,26 @@ def main():
                     now = get_current_time()
                     new_row = {
                         'Employee': tgt, 'Task Description': typ, 'Branch': brn,
-                        'Assigned Date': now.strftime('%d/%b/%Y'), 'Assigned Time': now.strftime('%I:%M:%S %p'),
-                        'Journal Date': jdt.strftime('%d/%b/%Y'),
-                        'Number of Transaction': 0, 'Number of Findings': 0, 'Completion Status': 'In Progress',
-                        'Completion Date': '', 'Completion Time': '', 'Duration': '', 'Progress %': ''
+                        'Assigned Date': now.strftime('%d/%b/%Y'), 
+                        'Assigned Time': now.strftime('%I:%M:%S %p'),
+                        'Completion Status': 'In Progress', 'Completion Date': '', 'Completion Time': '', 
+                        'Duration': '', 'Progress %': '',
+                        'Journal Date': jdt.strftime('%d/%b/%Y'), 
+                        'Number of Findings': 0, 'Number of Transaction': 0
                     }
                     updated_df = pd.concat([tasks_df, pd.DataFrame([new_row])], ignore_index=True)
                     if update_data(conn, updated_df, "Tasks"):
-                        st.success("✅ Task Assigned! Waiting 5s...")
-                        time.sleep(5)
-                        st.rerun()
+                        st.success("✅ Assigned! Waiting 5s..."); time.sleep(5); st.rerun()
 
         # TAB 4: SQL
         with tabs[3]:
             st.header("SQL Query Tool")
-            st.markdown("Use `df` as table name.")
             query = st.text_area("SQL", value='SELECT Branch, SUM("Number of Transaction") FROM df GROUP BY Branch', height=100)
             if st.button("Run SQL"):
                 try:
                     sql_conn = sqlite3.connect(':memory:')
                     tasks_df.to_sql('df', sql_conn, index=False, if_exists='replace')
-                    result = pd.read_sql_query(query, sql_conn)
-                    st.dataframe(result, use_container_width=True)
+                    st.dataframe(pd.read_sql_query(query, sql_conn), use_container_width=True)
                 except Exception as e: st.error(f"SQL Error: {e}")
 
         # TAB 5: Users
@@ -312,18 +305,14 @@ def main():
             c1, c2 = st.columns(2)
             with c1:
                 with st.form("add_user"):
-                    nu = st.text_input("Username")
-                    np = st.text_input("Password")
-                    nr = st.selectbox("Role", ["User", "Admin"])
+                    nu = st.text_input("Username"); np = st.text_input("Password"); nr = st.selectbox("Role", ["User", "Admin"])
                     if st.form_submit_button("Add User"):
                         if nu not in users_df['Username'].values:
                             new_u = pd.DataFrame([{'Username': nu, 'Password': np, 'Role': nr}])
                             if update_data(conn, pd.concat([users_df, new_u], ignore_index=True), "Users"):
-                                st.success("User Created")
-                                time.sleep(5)
-                                st.rerun()
-                        else: st.error("User exists")
-            with c2: st.dataframe(users_df[['Username', 'Role']], hide_index=True, use_container_width=True)
+                                st.success("Created"); time.sleep(5); st.rerun()
+                        else: st.error("Exists")
+            with c2: st.dataframe(users_df[['Username', 'Role']], hide_index=True)
 
         # TAB 6: Report
         with tabs[5]:
@@ -339,18 +328,23 @@ def main():
                     submitted = st.form_submit_button("🚀 Generate Report", type="primary")
 
             if submitted:
+                # Use logic DF for filtering (it has date objects)
                 report_df = tasks_df_logic.copy()
                 if use_ad: report_df = report_df[report_df['Assigned Date'].dt.date == r_ad]
                 if use_jd: report_df = report_df[report_df['Journal Date'].dt.date == r_jd]
                 if use_em: report_df = report_df[report_df['Employee'] == r_em]
                 if use_st: report_df = report_df[report_df['Completion Status'] == r_st]
-                
-                # Format Dates for Export
-                if 'Assigned Date' in report_df.columns: report_df['Assigned Date'] = report_df['Assigned Date'].dt.strftime('%d/%b/%Y')
-                if 'Journal Date' in report_df.columns: report_df['Journal Date'] = report_df['Journal Date'].dt.strftime('%d/%b/%Y')
 
-                final_cols = [c for c in ['Employee','Task Description','Branch','Assigned Date','Completion Status','Journal Date','Number of Transaction','Number of Findings'] if c in report_df.columns]
-                report_df = report_df[final_cols]
+                # Format dates back to DD/MMM/YYYY for export
+                for col in ['Assigned Date', 'Journal Date']:
+                    if col in report_df.columns:
+                        report_df[col] = report_df[col].dt.strftime('%d/%b/%Y')
+
+                final_cols = ['Employee','Task Description','Branch','Assigned Date','Completion Status','Journal Date','Number of Findings','Number of Transaction']
+                # Intersection of columns
+                valid_cols = [c for c in final_cols if c in report_df.columns]
+                report_df = report_df[valid_cols]
+                
                 st.dataframe(report_df, use_container_width=True)
                 st.download_button("📥 Download CSV", report_df.to_csv(index=False).encode('utf-8'), "report.csv", "text/csv")
 
@@ -374,13 +368,20 @@ def main():
                 with st.expander(f"📌 {row['Task Description']} @ {row['Branch']}", expanded=True):
                     with st.form(key=f"u_act_{idx}"):
                         c1, c2 = st.columns(2)
-                        val_trans = int(float(row['Number of Transaction'])) if row['Number of Transaction']!='' else 0
-                        val_find = int(float(row['Number of Findings'])) if row['Number of Findings']!='' else 0
-                        nt = c1.number_input("Transactions", value=val_trans)
-                        nf = c2.number_input("Findings", value=val_find)
+                        # Handle potential empty strings
+                        try: vt = int(float(row['Number of Transaction'])) if row['Number of Transaction']!='' else 0
+                        except: vt = 0
+                        try: vf = int(float(row['Number of Findings'])) if row['Number of Findings']!='' else 0
+                        except: vf = 0
+                        
+                        nt = c1.number_input("Transactions", value=vt)
+                        nf = c2.number_input("Findings", value=vf)
+                        
                         if st.form_submit_button("✅ Mark Complete", type="primary"):
                             now = get_current_time()
                             cd = now.strftime('%d/%b/%Y'); ct = now.strftime('%I:%M:%S %p')
+                            
+                            # Calculate duration (Safe function handles string inputs now)
                             dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], cd, ct)
                             
                             tasks_df.at[idx, 'Number of Transaction'] = nt
@@ -390,10 +391,9 @@ def main():
                             tasks_df.at[idx, 'Completion Time'] = ct
                             tasks_df.at[idx, 'Duration'] = dur
                             tasks_df.at[idx, 'Progress %'] = 1
+                            
                             if update_data(conn, tasks_df, "Tasks"):
-                                st.balloons()
-                                time.sleep(5)
-                                st.rerun()
+                                st.balloons(); time.sleep(5); st.rerun()
 
         with u_tabs[2]:
             st.markdown("#### ⚡ Quick Log")
@@ -407,15 +407,14 @@ def main():
                     new_r = {
                         'Employee': user['Username'], 'Task Description': ty, 'Branch': br,
                         'Assigned Date': now.strftime('%d/%b/%Y'), 'Assigned Time': now.strftime('%I:%M:%S %p'),
-                        'Journal Date': jd.strftime('%d/%b/%Y'),
-                        'Number of Transaction': 0, 'Number of Findings': 0, 'Completion Status': 'In Progress',
-                        'Completion Date': '', 'Completion Time': '', 'Duration': '', 'Progress %': ''
+                        'Completion Status': 'In Progress', 'Completion Date': '', 'Completion Time': '',
+                        'Duration': '', 'Progress %': '',
+                        'Journal Date': jd.strftime('%d/%b/%Y'), 
+                        'Number of Findings': 0, 'Number of Transaction': 0
                     }
                     updated_df = pd.concat([tasks_df, pd.DataFrame([new_r])], ignore_index=True)
                     if update_data(conn, updated_df, "Tasks"):
-                        st.success("Started! Waiting 5s...")
-                        time.sleep(5)
-                        st.rerun()
+                        st.success("Started! Waiting 5s..."); time.sleep(5); st.rerun()
 
 if __name__ == "__main__":
     main()
