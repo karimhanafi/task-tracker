@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
-# --- CONFIGURATION & DARK MODE FORCE ---
+# --- CONFIGURATION & VISUALS ---
 st.set_page_config(page_title="IC Audit Pro", layout="wide", page_icon="🛡️")
 
 st.markdown("""
@@ -20,6 +20,8 @@ st.markdown("""
     div[data-testid="stMetricValue"] { color: #FFFFFF !important; }
     div[data-testid="stExpander"] { background-color: #262730; border-radius: 10px; }
     .stButton>button { border-radius: 20px; font-weight: bold; }
+    /* Highlight the format notes */
+    .format-note { font-size: 0.8rem; color: #ffbd45; margin-top: -10px; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -30,11 +32,10 @@ TASK_OPTIONS = [
     "Log Review", "Documentation Check", "Customer Service Review", "Other"
 ]
 
-# --- DATABASE CONNECTION (Fixed for Stability) ---
+# --- DATABASE CONNECTION ---
 def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        # ERROR FIX: Increased ttl to 10 seconds to avoid hitting Google's rate limit
         tasks_df = conn.read(worksheet="Tasks", ttl=10)
         users_df = conn.read(worksheet="Users", ttl=10)
         
@@ -47,7 +48,6 @@ def get_data():
             
         return conn, tasks_df, users_df
     except Exception as e:
-        # If quota exceeded, we return empty frames but handle it gracefully in main()
         return conn, pd.DataFrame(), pd.DataFrame()
 
 def update_data(conn, df, worksheet_name):
@@ -78,12 +78,9 @@ def main():
 
     conn, tasks_df, users_df = get_data()
 
-    # --- ERROR FIX: SAFETY STOP ---
-    # If users_df is empty, it means the Google Connection failed (Quota Error).
-    # We stop here to prevent the "KeyError" crash.
     if users_df.empty:
         st.warning("⚠️ **System is cooling down.**")
-        st.info("You hit the Google Sheets speed limit. Please wait **60 seconds** and refresh the page.")
+        st.info("Please wait **60 seconds** and refresh the page to reset the Google Quota.")
         st.stop() 
 
     # Data Type Fixes
@@ -93,8 +90,11 @@ def main():
     if not tasks_df.empty:
         tasks_df['Number of Findings'] = pd.to_numeric(tasks_df['Number of Findings'], errors='coerce').fillna(0)
         tasks_df['Number of Transaction'] = pd.to_numeric(tasks_df['Number of Transaction'], errors='coerce').fillna(0)
+        # Ensure dates are datetime objects for filtering
         if 'Journal Date' in tasks_df.columns:
             tasks_df['Journal Date'] = pd.to_datetime(tasks_df['Journal Date'], format='%d/%b/%Y', errors='coerce')
+        if 'Assigned Date' in tasks_df.columns:
+            tasks_df['Assigned Date'] = pd.to_datetime(tasks_df['Assigned Date'], format='%d/%b/%Y', errors='coerce')
 
     # --- LOGIN SCREEN ---
     if not st.session_state.logged_in:
@@ -129,12 +129,12 @@ def main():
     # ==========================================
     if user['Role'] == 'Admin':
         st.title("📊 Executive Dashboard")
-        tabs = st.tabs(["📈 Analytics & Filters", "📝 Manage Tasks", "➕ Assign Task", "💻 SQL Tool", "👥 User Mgmt"])
+        # ADDED NEW TAB AT THE END: "📑 Custom Report"
+        tabs = st.tabs(["📈 Analytics", "📝 Manage Tasks", "➕ Assign Task", "💻 SQL Tool", "👥 User Mgmt", "📑 Custom Report"])
 
         # --- TAB 1: ANALYTICS ---
         with tabs[0]:
             st.header("Drill-Down Analysis")
-            
             if tasks_df.empty:
                 st.info("No data available.")
             else:
@@ -160,7 +160,6 @@ def main():
                         df_filtered = df_filtered[df_filtered['Task Description'].isin(selected_tasks)]
 
                 st.divider()
-
                 tot_trans = df_filtered['Number of Transaction'].sum()
                 tot_find = df_filtered['Number of Findings'].sum()
                 
@@ -179,8 +178,6 @@ def main():
                     final_table = pd.merge(grouped_view, count_view, on=['Employee', 'Branch', 'Task Description'])
                     final_table = final_table[['Employee', 'Branch', 'Task Description', 'Count', 'Number of Transaction', 'Number of Findings']]
                     st.dataframe(final_table, use_container_width=True)
-                else:
-                    st.warning("No data matches your filters.")
 
         # --- TAB 2: EDIT/DELETE ---
         with tabs[1]:
@@ -231,7 +228,7 @@ def main():
                     st.success("Assigned!")
                     st.rerun()
 
-        # --- TAB 4: SQL TOOL (SQLite) ---
+        # --- TAB 4: SQL TOOL ---
         with tabs[3]:
             st.header("SQL Query Tool")
             st.markdown("Use `df` as table name.")
@@ -263,6 +260,69 @@ def main():
                         else: st.error("User exists")
             with c2:
                 st.dataframe(users_df[['Username', 'Role']], hide_index=True, use_container_width=True)
+
+        # --- TAB 6: NEW REPORTING SYSTEM ---
+        with tabs[5]:
+            st.header("📑 Generate Custom Report")
+            
+            # The "Popup" Form (Expander)
+            with st.expander("🔻 Report Filters (Click to Open)", expanded=True):
+                st.info("ℹ️ Select filters below. Leave checkboxes unchecked to include ALL records.")
+                
+                with st.form("report_form"):
+                    col_r1, col_r2 = st.columns(2)
+                    
+                    # 1. Assigned Date
+                    with col_r1:
+                        use_assign_date = st.checkbox("Filter by Assigned Date?")
+                        r_assign_date = st.date_input("Select Assigned Date")
+                        st.markdown("<p class='format-note'>Format: YYYY/MM/DD (Example: 2025/12/26)</p>", unsafe_allow_html=True)
+
+                    # 2. Journal Date
+                    with col_r2:
+                        use_journal_date = st.checkbox("Filter by Journal Date?")
+                        r_journal_date = st.date_input("Select Journal Date")
+                        st.markdown("<p class='format-note'>Format: YYYY/MM/DD (Example: 2025/12/01)</p>", unsafe_allow_html=True)
+                    
+                    col_r3, col_r4 = st.columns(2)
+
+                    # 3. Employee
+                    with col_r3:
+                        use_emp = st.checkbox("Filter by Employee?")
+                        r_emp = st.selectbox("Select Employee", users_df['Username'].unique())
+                        st.markdown("<p class='format-note'>Format: Select exact username from list</p>", unsafe_allow_html=True)
+
+                    # 4. Status
+                    with col_r4:
+                        use_status = st.checkbox("Filter by Status?")
+                        r_status = st.selectbox("Select Status", ["Completed", "In Progress"])
+                        st.markdown("<p class='format-note'>Format: Completed / In Progress</p>", unsafe_allow_html=True)
+
+                    submitted = st.form_submit_button("🚀 Generate Report", type="primary")
+
+            # Logic to Filter Data
+            if submitted:
+                report_df = tasks_df.copy()
+                
+                # Apply filters only if Checkbox is True
+                if use_assign_date and 'Assigned Date' in report_df.columns:
+                    report_df = report_df[report_df['Assigned Date'].dt.date == r_assign_date]
+                
+                if use_journal_date and 'Journal Date' in report_df.columns:
+                    report_df = report_df[report_df['Journal Date'].dt.date == r_journal_date]
+                
+                if use_emp:
+                    report_df = report_df[report_df['Employee'] == r_emp]
+                    
+                if use_status:
+                    report_df = report_df[report_df['Completion Status'] == r_status]
+
+                st.success(f"Found {len(report_df)} records matching your criteria.")
+                st.dataframe(report_df, use_container_width=True)
+                
+                # Download Button
+                csv = report_df.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Report as CSV", csv, "custom_report.csv", "text/csv")
 
     # ==========================================
     # ROLE: USER VIEW
