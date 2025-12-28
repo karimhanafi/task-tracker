@@ -27,10 +27,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. CONSTANTS ---
-BRANCH_OPTIONS = ["HQ", "SUZ", "HUR", "SSH", "LXR", "ASW", "ALX", "CAI", "GIZA", "MANS", "OTHERS"]
+BRANCH_OPTIONS = ["ASW","BNS","DOM","GON","HUR","ISM","LXR","MHL","MNS","MNY","PST","SBN","SHM","SHN","SOH","SSH","SSN","SUZ","TOR"]
 TASK_OPTIONS = [
-    "Cash Count", "Operation Audit", "Stock Count", "ATM Review", 
-    "Log Review", "Documentation Check", "Customer Service Review", "Other"
+    "Cash", "Operation", "C.S"
 ]
 EGYPT_TZ = pytz.timezone('Africa/Cairo')
 
