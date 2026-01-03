@@ -172,10 +172,9 @@ def main():
     # --- ADMIN VIEW ---
     if user['Role'] == 'Admin':
         st.title("📊 Executive Dashboard")
-        # ADDED "⚡ My Tasks" to the list of tabs
         tabs = st.tabs(["📈 Analytics", "⚡ My Tasks", "📝 Manage Tasks", "➕ Assign Task", "💻 SQL Tool", "👥 User Mgmt", "📑 Custom Report"])
 
-        # TAB 1: Analytics
+        # TAB 1: Analytics (Updated for Detailed View & Serial Counting)
         with tabs[0]:
             st.header("Drill-Down Analysis")
             if tasks_df_logic.empty:
@@ -220,54 +219,65 @@ def main():
                 k3.metric("Transactions", f"{int(tot_trans):,}")
                 k4.metric("Branches", df_filtered['Branch'].nunique() if 'Branch' in df_filtered else 0)
 
-                st.subheader("Hierarchy")
+                # --- NEW DETAILED TABLE LOGIC ---
+                st.subheader("Detailed Audit List")
                 if not df_filtered.empty:
-                    grp = ['Employee', 'Branch', 'Task Description']
-                    sums = ['Number of Transaction', 'Number of Findings']
-                    avail = [c for c in grp if c in df_filtered]
-                    if avail:
-                        grouped = df_filtered.groupby(avail)[sums].sum().reset_index()
-                        count = df_filtered.groupby(avail).size().reset_index(name='Count')
-                        st.dataframe(pd.merge(grouped, count, on=avail), use_container_width=True)
+                    # 1. Define exact columns requested
+                    cols_to_show = [
+                        'Employee', 'Branch', 'Task Description',
+                        'Assigned Date', 'Assigned Time',
+                        'Journal Date',
+                        'Completion Date', 'Completion Time',
+                        'Duration',
+                        'Number of Transaction', 'Number of Findings'
+                    ]
+                    # Filter to ensure columns exist
+                    final_cols = [c for c in cols_to_show if c in df_filtered.columns]
+                    
+                    # Create display dataframe
+                    df_display = df_filtered[final_cols].copy()
+                    
+                    # 2. Format Dates back to String for Display (so they look nice)
+                    if 'Assigned Date' in df_display.columns:
+                        df_display['Assigned Date'] = df_display['Assigned Date'].dt.strftime('%d/%b/%Y')
+                    if 'Journal Date' in df_display.columns:
+                        df_display['Journal Date'] = df_display['Journal Date'].dt.strftime('%d/%b/%Y')
+                        
+                    # 3. FIX SERIAL COUNTING (Start from 1, not 0)
+                    df_display.index = range(1, len(df_display) + 1)
+                    
+                    st.dataframe(df_display, use_container_width=True)
 
-        # TAB 2: MY TASKS (NEW FOR ADMIN)
+        # TAB 2: MY TASKS
         with tabs[1]:
             st.header("⚡ My Active Tasks")
-            # Filter tasks assigned ONLY to this Admin user
             mask = (tasks_df['Completion Status'] != 'Completed') & (tasks_df['Employee'] == user['Username'])
             my_active = tasks_df[mask].copy()
-            
-            if my_active.empty:
-                st.success("🎉 You have no pending tasks assigned to you.")
-            else:
-                for idx, row in my_active.iterrows():
-                    with st.expander(f"📌 {row['Task Description']} @ {row['Branch']}", expanded=True):
-                        with st.form(key=f"adm_complete_{idx}"):
-                            c1, c2 = st.columns(2)
-                            try: vt = int(float(row['Number of Transaction'])) if row['Number of Transaction']!='' else 0
-                            except: vt = 0
-                            try: vf = int(float(row['Number of Findings'])) if row['Number of Findings']!='' else 0
-                            except: vf = 0
-                            
-                            nt = c1.number_input("Transactions", value=vt)
-                            nf = c2.number_input("Findings", value=vf)
-                            
-                            if st.form_submit_button("✅ Mark Complete", type="primary"):
-                                now = get_current_time()
-                                cd = now.strftime('%d/%b/%Y'); ct = now.strftime('%I:%M:%S %p')
-                                dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], cd, ct)
-                                
-                                tasks_df.at[idx, 'Number of Transaction'] = nt
-                                tasks_df.at[idx, 'Number of Findings'] = nf
-                                tasks_df.at[idx, 'Completion Status'] = 'Completed'
-                                tasks_df.at[idx, 'Completion Date'] = cd
-                                tasks_df.at[idx, 'Completion Time'] = ct
-                                tasks_df.at[idx, 'Duration'] = dur
-                                tasks_df.at[idx, 'Progress %'] = 1
-                                
-                                if update_data(conn, tasks_df, "Tasks"): st.balloons(); time.sleep(3); st.rerun()
+            if my_active.empty: st.success("🎉 You have no pending tasks.")
+            for idx, row in my_active.iterrows():
+                with st.expander(f"📌 {row['Task Description']} @ {row['Branch']}", expanded=True):
+                    with st.form(key=f"adm_complete_{idx}"):
+                        c1, c2 = st.columns(2)
+                        try: vt = int(float(row['Number of Transaction'])) if row['Number of Transaction']!='' else 0
+                        except: vt = 0
+                        try: vf = int(float(row['Number of Findings'])) if row['Number of Findings']!='' else 0
+                        except: vf = 0
+                        nt = c1.number_input("Transactions", value=vt)
+                        nf = c2.number_input("Findings", value=vf)
+                        if st.form_submit_button("✅ Mark Complete", type="primary"):
+                            now = get_current_time()
+                            cd = now.strftime('%d/%b/%Y'); ct = now.strftime('%I:%M:%S %p')
+                            dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], cd, ct)
+                            tasks_df.at[idx, 'Number of Transaction'] = nt
+                            tasks_df.at[idx, 'Number of Findings'] = nf
+                            tasks_df.at[idx, 'Completion Status'] = 'Completed'
+                            tasks_df.at[idx, 'Completion Date'] = cd
+                            tasks_df.at[idx, 'Completion Time'] = ct
+                            tasks_df.at[idx, 'Duration'] = dur
+                            tasks_df.at[idx, 'Progress %'] = 1
+                            if update_data(conn, tasks_df, "Tasks"): st.balloons(); time.sleep(3); st.rerun()
 
-        # TAB 3: Edit (Manage Others)
+        # TAB 3: Edit
         with tabs[2]:
             st.markdown("#### 🛠️ Edit or Delete Records")
             f_branch = st.selectbox("Filter by Branch", ["All"] + BRANCH_OPTIONS)
@@ -284,7 +294,6 @@ def main():
                         except: vt = 0
                         try: vf = int(float(row['Number of Findings'])) if row['Number of Findings']!='' else 0
                         except: vf = 0
-                        
                         nt = c1.number_input("Transactions", value=vt)
                         nf = c2.number_input("Findings", value=vf)
                         c_act1, c_act2 = st.columns(2)
@@ -348,27 +357,27 @@ def main():
             st.header("📑 Generate Custom Report")
             with st.expander("🔻 Report Filters (Leave blank to select ALL)", expanded=True):
                 with st.form("report_form"):
-                    col_r1, col_r2 = st.columns(2)
-                    with col_r1:
+                    c1, c2 = st.columns(2)
+                    with c1:
                         dates = sorted(tasks_df_logic['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in tasks_df_logic else []
                         sel_jd = st.multiselect("Journal Date", dates, placeholder="All Dates")
-                    with col_r2:
+                    with c2:
                         dates = sorted(tasks_df_logic['Assigned Date'].dropna().dt.date.unique()) if 'Assigned Date' in tasks_df_logic else []
                         sel_ad = st.multiselect("Assigned Date", dates, placeholder="All Dates")
                     
-                    col_r3, col_r4 = st.columns(2)
-                    with col_r3:
+                    c3, c4 = st.columns(2)
+                    with c3:
                         opts = list(tasks_df_logic['Branch'].unique()) if 'Branch' in tasks_df_logic else []
                         sel_br = st.multiselect("Branch", opts, placeholder="All Branches")
-                    with col_r4:
+                    with c4:
                         opts = list(tasks_df_logic['Task Description'].unique()) if 'Task Description' in tasks_df_logic else []
                         sel_tk = st.multiselect("Task", opts, placeholder="All Tasks")
                     
-                    col_r5, col_r6 = st.columns(2)
-                    with col_r5:
+                    c5, c6 = st.columns(2)
+                    with c5:
                         opts = list(tasks_df_logic['Employee'].unique()) if 'Employee' in tasks_df_logic else []
                         sel_em = st.multiselect("Employee", opts, placeholder="All Employees")
-                    with col_r6:
+                    with c6:
                         opts = ["Completed", "In Progress"]
                         sel_st = st.multiselect("Status", opts, placeholder="All Statuses")
 
@@ -424,7 +433,6 @@ def main():
                             now = get_current_time()
                             cd = now.strftime('%d/%b/%Y'); ct = now.strftime('%I:%M:%S %p')
                             dur = calculate_duration(row['Assigned Date'], row['Assigned Time'], cd, ct)
-                            
                             tasks_df.at[idx, 'Number of Transaction'] = nt
                             tasks_df.at[idx, 'Number of Findings'] = nf
                             tasks_df.at[idx, 'Completion Status'] = 'Completed'
@@ -432,7 +440,6 @@ def main():
                             tasks_df.at[idx, 'Completion Time'] = ct
                             tasks_df.at[idx, 'Duration'] = dur
                             tasks_df.at[idx, 'Progress %'] = 1
-                            
                             if update_data(conn, tasks_df, "Tasks"): st.balloons(); time.sleep(3); st.rerun()
 
         with u_tabs[2]:
