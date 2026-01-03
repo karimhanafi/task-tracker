@@ -95,11 +95,6 @@ def color_status(val):
     elif val == 'In Progress': return 'background-color: #FFB347; color: black; font-weight: bold;'
     return ''
 
-def excel_color_status(val):
-    if val == 'Completed': return 'background-color: #C6EFCE; color: #006100;'
-    elif val == 'In Progress': return 'background-color: #FFEB9C; color: #9C0006;'
-    return ''
-
 # --- 6. MAIN APPLICATION ---
 def main():
     if 'logged_in' not in st.session_state:
@@ -269,12 +264,11 @@ def main():
                         st.success("Added"); st.rerun()
             st.dataframe(users_df)
 
-        # 7. REPORT (RESTORED ALL FILTERS)
+        # 7. REPORT (UPDATED WITH EMOJIS & FILTERS)
         with tabs[6]:
             st.header("📑 One-Sheet Report Generator")
             with st.expander("🔻 Report Filters (Leave blank to select ALL)", expanded=True):
                 with st.form("rep_form"):
-                    # Row 1: Dates
                     col_r1, col_r2 = st.columns(2)
                     with col_r1:
                         d1 = sorted(tasks_df_logic['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in tasks_df_logic else []
@@ -283,7 +277,6 @@ def main():
                         d2 = sorted(tasks_df_logic['Assigned Date'].dropna().dt.date.unique()) if 'Assigned Date' in tasks_df_logic else []
                         s_ad = st.multiselect("Assigned Date", d2)
 
-                    # Row 2: Branch & Task
                     col_r3, col_r4 = st.columns(2)
                     with col_r3:
                         opts = list(tasks_df_logic['Branch'].unique()) if 'Branch' in tasks_df_logic else []
@@ -292,7 +285,6 @@ def main():
                         opts = list(tasks_df_logic['Task Description'].unique()) if 'Task Description' in tasks_df_logic else []
                         s_tk = st.multiselect("Task", opts)
 
-                    # Row 3: Employee & Status
                     col_r5, col_r6 = st.columns(2)
                     with col_r5:
                         opts = list(tasks_df_logic['Employee'].unique()) if 'Employee' in tasks_df_logic else []
@@ -318,13 +310,13 @@ def main():
                 for c in ['Assigned Date', 'Journal Date']:
                     if c in rep_df.columns: rep_df[c] = rep_df[c].dt.strftime('%d/%b/%Y')
 
-                # Create Summary
+                # Create Summary with EMOJIS
                 summ = rep_df.groupby('Employee').apply(lambda x: pd.Series({
-                    'Completed': (x['Completion Status']=='Completed').sum(),
-                    'Pending': (x['Completion Status']!='Completed').sum(),
-                    'Total': len(x)
+                    'Completed ✅': (x['Completion Status']=='Completed').sum(),
+                    'Pending ⏳': (x['Completion Status']!='Completed').sum(),
+                    'Total 💼': len(x)
                 })).reset_index()
-                summ['Progress %'] = (summ['Completed'] / summ['Total']).fillna(0)
+                summ['Progress %'] = (summ['Completed ✅'] / summ['Total 💼']).fillna(0)
 
                 # Show Preview
                 st.subheader("Preview: Summary")
