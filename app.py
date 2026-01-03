@@ -115,7 +115,17 @@ def update_data(conn, df, worksheet_name):
         st.error(f"⚠️ Save Error: {e}")
         return False
 
-# --- 5. MAIN APPLICATION ---
+# --- 5. REPORT STYLING FUNCTIONS ---
+
+def color_status(val):
+    """Colors the status cell based on value."""
+    if val == 'Completed':
+        return 'background-color: #90EE90; color: black; font-weight: bold;' # Light Green
+    elif val == 'In Progress':
+        return 'background-color: #FFB347; color: black; font-weight: bold;' # Pastel Orange
+    return ''
+
+# --- 6. MAIN APPLICATION ---
 def main():
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
@@ -174,7 +184,7 @@ def main():
         st.title("📊 Executive Dashboard")
         tabs = st.tabs(["📈 Analytics", "⚡ My Tasks", "📝 Manage Tasks", "➕ Assign Task", "💻 SQL Tool", "👥 User Mgmt", "📑 Custom Report"])
 
-        # TAB 1: Analytics (Updated for Detailed View & Serial Counting)
+        # TAB 1: Analytics
         with tabs[0]:
             st.header("Drill-Down Analysis")
             if tasks_df_logic.empty:
@@ -219,10 +229,8 @@ def main():
                 k3.metric("Transactions", f"{int(tot_trans):,}")
                 k4.metric("Branches", df_filtered['Branch'].nunique() if 'Branch' in df_filtered else 0)
 
-                # --- NEW DETAILED TABLE LOGIC ---
                 st.subheader("Detailed Audit List")
                 if not df_filtered.empty:
-                    # 1. Define exact columns requested
                     cols_to_show = [
                         'Employee', 'Branch', 'Task Description',
                         'Assigned Date', 'Assigned Time',
@@ -231,21 +239,15 @@ def main():
                         'Duration',
                         'Number of Transaction', 'Number of Findings'
                     ]
-                    # Filter to ensure columns exist
                     final_cols = [c for c in cols_to_show if c in df_filtered.columns]
-                    
-                    # Create display dataframe
                     df_display = df_filtered[final_cols].copy()
                     
-                    # 2. Format Dates back to String for Display (so they look nice)
                     if 'Assigned Date' in df_display.columns:
                         df_display['Assigned Date'] = df_display['Assigned Date'].dt.strftime('%d/%b/%Y')
                     if 'Journal Date' in df_display.columns:
                         df_display['Journal Date'] = df_display['Journal Date'].dt.strftime('%d/%b/%Y')
                         
-                    # 3. FIX SERIAL COUNTING (Start from 1, not 0)
                     df_display.index = range(1, len(df_display) + 1)
-                    
                     st.dataframe(df_display, use_container_width=True)
 
         # TAB 2: MY TASKS
@@ -352,38 +354,39 @@ def main():
                         else: st.error("Exists")
             with c2: st.dataframe(users_df[['Username', 'Role']], hide_index=True)
 
-        # TAB 7: Report
+        # TAB 7: REPORT (NEW & COLORFUL)
         with tabs[6]:
             st.header("📑 Generate Custom Report")
-            with st.expander("🔻 Report Filters (Leave blank to select ALL)", expanded=True):
+            with st.expander("🔻 Report Filters", expanded=True):
                 with st.form("report_form"):
-                    c1, c2 = st.columns(2)
-                    with c1:
+                    col_r1, col_r2 = st.columns(2)
+                    with col_r1:
                         dates = sorted(tasks_df_logic['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in tasks_df_logic else []
                         sel_jd = st.multiselect("Journal Date", dates, placeholder="All Dates")
-                    with c2:
+                    with col_r2:
                         dates = sorted(tasks_df_logic['Assigned Date'].dropna().dt.date.unique()) if 'Assigned Date' in tasks_df_logic else []
                         sel_ad = st.multiselect("Assigned Date", dates, placeholder="All Dates")
                     
-                    c3, c4 = st.columns(2)
-                    with c3:
+                    col_r3, col_r4 = st.columns(2)
+                    with col_r3:
                         opts = list(tasks_df_logic['Branch'].unique()) if 'Branch' in tasks_df_logic else []
                         sel_br = st.multiselect("Branch", opts, placeholder="All Branches")
-                    with c4:
+                    with col_r4:
                         opts = list(tasks_df_logic['Task Description'].unique()) if 'Task Description' in tasks_df_logic else []
                         sel_tk = st.multiselect("Task", opts, placeholder="All Tasks")
                     
-                    c5, c6 = st.columns(2)
-                    with c5:
+                    col_r5, col_r6 = st.columns(2)
+                    with col_r5:
                         opts = list(tasks_df_logic['Employee'].unique()) if 'Employee' in tasks_df_logic else []
                         sel_em = st.multiselect("Employee", opts, placeholder="All Employees")
-                    with c6:
+                    with col_r6:
                         opts = ["Completed", "In Progress"]
                         sel_st = st.multiselect("Status", opts, placeholder="All Statuses")
 
                     submitted = st.form_submit_button("🚀 Generate Report", type="primary")
 
             if submitted:
+                # 1. FILTERING
                 report_df = tasks_df_logic.copy()
                 if sel_jd: report_df = report_df[report_df['Journal Date'].dt.date.isin(sel_jd)]
                 if sel_ad: report_df = report_df[report_df['Assigned Date'].dt.date.isin(sel_ad)]
@@ -392,15 +395,48 @@ def main():
                 if sel_em: report_df = report_df[report_df['Employee'].isin(sel_em)]
                 if sel_st: report_df = report_df[report_df['Completion Status'].isin(sel_st)]
 
+                # Format dates for display
                 for col in ['Assigned Date', 'Journal Date']:
                     if col in report_df.columns: report_df[col] = report_df[col].dt.strftime('%d/%b/%Y')
 
-                cols = ['Employee','Task Description','Branch','Assigned Date','Completion Status','Journal Date','Number of Findings','Number of Transaction']
+                # --- 2. SUMMARY TABLE (THE CATCHY PART) ---
+                st.subheader("📊 Summary by Employee")
+                if not report_df.empty:
+                    # Create Summary Aggregation
+                    summary = report_df.groupby('Employee').apply(lambda x: pd.Series({
+                        'Completed 🟢': (x['Completion Status'] == 'Completed').sum(),
+                        'Pending ⏳': (x['Completion Status'] != 'Completed').sum(),
+                        'Total 💼': len(x)
+                    })).reset_index()
+                    
+                    # Calculate Progress
+                    summary['Progress %'] = (summary['Completed 🟢'] / summary['Total 💼']) * 100
+                    
+                    # Apply Styling (Progress Bar)
+                    st.dataframe(
+                        summary.style.bar(subset=['Progress %'], color='#90EE90', vmin=0, vmax=100)
+                               .format({'Progress %': '{:.1f}%'}),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                
+                st.divider()
+
+                # --- 3. DETAILED DATA (COLOR CODED) ---
+                st.subheader("📝 Detailed Data")
+                
+                cols = ['Assigned Date','Employee','Branch','Task Description','Journal Date','Completion Status', 'Number of Transaction', 'Number of Findings']
                 valid = [c for c in cols if c in report_df.columns]
-                report_df = report_df[valid]
-                st.success(f"Generated report with {len(report_df)} records.")
-                st.dataframe(report_df, use_container_width=True)
-                st.download_button("📥 Download CSV", report_df.to_csv(index=False).encode('utf-8'), "report.csv", "text/csv")
+                final_view = report_df[valid].copy()
+                
+                # Apply Color Highlighting
+                st.dataframe(
+                    final_view.style.map(color_status, subset=['Completion Status']),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                st.download_button("📥 Download Raw CSV", report_df.to_csv(index=False).encode('utf-8'), "report.csv", "text/csv")
 
     # --- USER VIEW ---
     else:
