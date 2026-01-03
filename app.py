@@ -27,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. CONSTANTS ---
-BRANCH_OPTIONS = ["ASW","BNS","DOM","GON","HUR","ISM","LXR","MHL","MNS","MNY","PST","SBN","SHM","SHN","SOH","SSH","SSN","SUZ","TOR"]
+BRANCH_OPTIONS = ["NAL","PET","DMP","MND","ADT","BRG","MIN","KSH","RSH","DMN","BNH","ALX","XND","SAN","SMO","TNT","ZGZ"]
 TASK_OPTIONS = [
     "Cash", "Operation", "C.S"
 ]
