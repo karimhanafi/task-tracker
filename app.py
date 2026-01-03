@@ -3,6 +3,7 @@ import pandas as pd
 import sqlite3
 import time
 import pytz
+import io # NEW: Required for Excel buffering
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
@@ -118,11 +119,19 @@ def update_data(conn, df, worksheet_name):
 # --- 5. REPORT STYLING FUNCTIONS ---
 
 def color_status(val):
-    """Colors the status cell based on value."""
+    """Colors for Streamlit Display"""
     if val == 'Completed':
-        return 'background-color: #90EE90; color: black; font-weight: bold;' # Light Green
+        return 'background-color: #90EE90; color: black; font-weight: bold;'
     elif val == 'In Progress':
-        return 'background-color: #FFB347; color: black; font-weight: bold;' # Pastel Orange
+        return 'background-color: #FFB347; color: black; font-weight: bold;'
+    return ''
+
+def excel_color_status(val):
+    """Colors for Excel Export"""
+    if val == 'Completed':
+        return 'background-color: #90EE90'
+    elif val == 'In Progress':
+        return 'background-color: #FFB347'
     return ''
 
 # --- 6. MAIN APPLICATION ---
@@ -354,7 +363,7 @@ def main():
                         else: st.error("Exists")
             with c2: st.dataframe(users_df[['Username', 'Role']], hide_index=True)
 
-        # TAB 7: REPORT (NEW & COLORFUL)
+        # TAB 7: REPORT (EXCEL EXPORT)
         with tabs[6]:
             st.header("📑 Generate Custom Report")
             with st.expander("🔻 Report Filters", expanded=True):
@@ -395,48 +404,56 @@ def main():
                 if sel_em: report_df = report_df[report_df['Employee'].isin(sel_em)]
                 if sel_st: report_df = report_df[report_df['Completion Status'].isin(sel_st)]
 
-                # Format dates for display
+                # Format dates
                 for col in ['Assigned Date', 'Journal Date']:
                     if col in report_df.columns: report_df[col] = report_df[col].dt.strftime('%d/%b/%Y')
 
-                # --- 2. SUMMARY TABLE (THE CATCHY PART) ---
-                st.subheader("📊 Summary by Employee")
+                # --- SUMMARY ---
+                summary = pd.DataFrame()
                 if not report_df.empty:
-                    # Create Summary Aggregation
                     summary = report_df.groupby('Employee').apply(lambda x: pd.Series({
-                        'Completed 🟢': (x['Completion Status'] == 'Completed').sum(),
-                        'Pending ⏳': (x['Completion Status'] != 'Completed').sum(),
-                        'Total 💼': len(x)
+                        'Completed': (x['Completion Status'] == 'Completed').sum(),
+                        'Pending': (x['Completion Status'] != 'Completed').sum(),
+                        'Total': len(x)
                     })).reset_index()
+                    summary['Progress %'] = (summary['Completed'] / summary['Total']) * 100
                     
-                    # Calculate Progress
-                    summary['Progress %'] = (summary['Completed 🟢'] / summary['Total 💼']) * 100
-                    
-                    # Apply Styling (Progress Bar)
+                    st.subheader("📊 Summary Preview")
                     st.dataframe(
                         summary.style.bar(subset=['Progress %'], color='#90EE90', vmin=0, vmax=100)
                                .format({'Progress %': '{:.1f}%'}),
-                        use_container_width=True,
-                        hide_index=True
+                        use_container_width=True
                     )
-                
-                st.divider()
 
-                # --- 3. DETAILED DATA (COLOR CODED) ---
-                st.subheader("📝 Detailed Data")
-                
+                # --- DETAILED ---
+                st.subheader("📝 Detailed Data Preview")
                 cols = ['Assigned Date','Employee','Branch','Task Description','Journal Date','Completion Status', 'Number of Transaction', 'Number of Findings']
                 valid = [c for c in cols if c in report_df.columns]
                 final_view = report_df[valid].copy()
                 
-                # Apply Color Highlighting
                 st.dataframe(
                     final_view.style.map(color_status, subset=['Completion Status']),
-                    use_container_width=True,
-                    hide_index=True
+                    use_container_width=True
                 )
                 
-                st.download_button("📥 Download Raw CSV", report_df.to_csv(index=False).encode('utf-8'), "report.csv", "text/csv")
+                # --- EXCEL GENERATION (WITH COLORS) ---
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    # Sheet 1: Summary
+                    summary.to_excel(writer, sheet_name='Summary', index=False)
+                    
+                    # Sheet 2: Detailed (With Styling)
+                    # We use map() to apply the same green/orange logic to the Excel file
+                    final_view.style.map(excel_color_status, subset=['Completion Status'])\
+                              .to_excel(writer, sheet_name='Detailed Data', index=False)
+                              
+                # Download Button
+                st.download_button(
+                    label="📥 Download Excel Report (.xlsx)",
+                    data=buffer.getvalue(),
+                    file_name="Audit_Report.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
 
     # --- USER VIEW ---
     else:
