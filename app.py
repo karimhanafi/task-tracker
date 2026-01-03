@@ -95,6 +95,11 @@ def color_status(val):
     elif val == 'In Progress': return 'background-color: #FFB347; color: black; font-weight: bold;'
     return ''
 
+def excel_color_status(val):
+    if val == 'Completed': return 'background-color: #C6EFCE; color: #006100;'
+    elif val == 'In Progress': return 'background-color: #FFEB9C; color: #9C0006;'
+    return ''
+
 # --- 6. MAIN APPLICATION ---
 def main():
     if 'logged_in' not in st.session_state:
@@ -264,23 +269,51 @@ def main():
                         st.success("Added"); st.rerun()
             st.dataframe(users_df)
 
-        # 7. REPORT (ONE SHEET EXCEL)
+        # 7. REPORT (RESTORED ALL FILTERS)
         with tabs[6]:
             st.header("📑 One-Sheet Report Generator")
-            with st.expander("🔻 Report Filters", expanded=True):
+            with st.expander("🔻 Report Filters (Leave blank to select ALL)", expanded=True):
                 with st.form("rep_form"):
-                    c1, c2 = st.columns(2)
-                    d1 = sorted(tasks_df_logic['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in tasks_df_logic else []
-                    s_jd = c1.multiselect("Journal Date", d1)
-                    d2 = sorted(tasks_df_logic['Assigned Date'].dropna().dt.date.unique()) if 'Assigned Date' in tasks_df_logic else []
-                    s_ad = c2.multiselect("Assigned Date", d2)
+                    # Row 1: Dates
+                    col_r1, col_r2 = st.columns(2)
+                    with col_r1:
+                        d1 = sorted(tasks_df_logic['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in tasks_df_logic else []
+                        s_jd = st.multiselect("Journal Date", d1)
+                    with col_r2:
+                        d2 = sorted(tasks_df_logic['Assigned Date'].dropna().dt.date.unique()) if 'Assigned Date' in tasks_df_logic else []
+                        s_ad = st.multiselect("Assigned Date", d2)
+
+                    # Row 2: Branch & Task
+                    col_r3, col_r4 = st.columns(2)
+                    with col_r3:
+                        opts = list(tasks_df_logic['Branch'].unique()) if 'Branch' in tasks_df_logic else []
+                        s_br = st.multiselect("Branch", opts)
+                    with col_r4:
+                        opts = list(tasks_df_logic['Task Description'].unique()) if 'Task Description' in tasks_df_logic else []
+                        s_tk = st.multiselect("Task", opts)
+
+                    # Row 3: Employee & Status
+                    col_r5, col_r6 = st.columns(2)
+                    with col_r5:
+                        opts = list(tasks_df_logic['Employee'].unique()) if 'Employee' in tasks_df_logic else []
+                        s_em = st.multiselect("Employee", opts)
+                    with col_r6:
+                        opts = ["Completed", "In Progress"]
+                        s_st = st.multiselect("Status", opts)
+
                     submitted = st.form_submit_button("🚀 Generate Report", type="primary")
 
             if submitted:
                 rep_df = tasks_df_logic.copy()
+                
+                # Apply Filters
                 if s_jd: rep_df = rep_df[rep_df['Journal Date'].dt.date.isin(s_jd)]
                 if s_ad: rep_df = rep_df[rep_df['Assigned Date'].dt.date.isin(s_ad)]
-                
+                if s_br: rep_df = rep_df[rep_df['Branch'].isin(s_br)]
+                if s_tk: rep_df = rep_df[rep_df['Task Description'].isin(s_tk)]
+                if s_em: rep_df = rep_df[rep_df['Employee'].isin(s_em)]
+                if s_st: rep_df = rep_df[rep_df['Completion Status'].isin(s_st)]
+
                 # Format Dates
                 for c in ['Assigned Date', 'Journal Date']:
                     if c in rep_df.columns: rep_df[c] = rep_df[c].dt.strftime('%d/%b/%Y')
@@ -295,7 +328,7 @@ def main():
 
                 # Show Preview
                 st.subheader("Preview: Summary")
-                st.dataframe(summ.style.bar(subset=['Progress %'], color='#90EE90'), use_container_width=True)
+                st.dataframe(summ.style.bar(subset=['Progress %'], color='#90EE90', vmin=0, vmax=1), use_container_width=True)
                 
                 st.subheader("Preview: Detailed Data")
                 cols = ['Assigned Date','Employee','Branch','Task Description','Journal Date','Completion Status','Number of Transaction','Number of Findings']
@@ -310,34 +343,27 @@ def main():
                     writer.sheets['Audit Report'] = ws
 
                     # Formats
-                    fmt_header = wb.add_format({'bold': True, 'align': 'center', 'bg_color': '#D3D3D3', 'border': 1})
                     fmt_green = wb.add_format({'bg_color': '#C6EFCE', 'font_color': '#006100'})
                     fmt_orange = wb.add_format({'bg_color': '#FFEB9C', 'font_color': '#9C0006'})
-                    fmt_border = wb.add_format({'border': 1})
-                    fmt_percent = wb.add_format({'num_format': '0%'})
 
-                    # Write Summary Table (Start Row 0)
+                    # Write Summary
                     ws.write_string(0, 0, "EXECUTIVE SUMMARY", wb.add_format({'bold':True, 'font_size':14}))
                     summ.to_excel(writer, sheet_name='Audit Report', startrow=2, index=False)
-                    
-                    # Apply Data Bars to Summary Progress
                     ws.conditional_format(3, 4, 3+len(summ), 4, {'type': 'data_bar', 'bar_color': '#63C384'})
 
-                    # Write Detailed Table (Start Row = len(summary) + 5)
+                    # Write Detail
                     start_row = len(summ) + 6
                     ws.write_string(start_row, 0, "DETAILED AUDIT LOG", wb.add_format({'bold':True, 'font_size':14}))
                     det_df.to_excel(writer, sheet_name='Audit Report', startrow=start_row+2, index=False)
 
-                    # Highlight Status Column in Detailed Table
-                    status_col_idx = det_df.columns.get_loc('Completion Status')
-                    # Green for Completed
-                    ws.conditional_format(start_row+3, status_col_idx, start_row+3+len(det_df), status_col_idx,
-                                          {'type': 'cell', 'criteria': '==', 'value': '"Completed"', 'format': fmt_green})
-                    # Orange for In Progress
-                    ws.conditional_format(start_row+3, status_col_idx, start_row+3+len(det_df), status_col_idx,
-                                          {'type': 'cell', 'criteria': '==', 'value': '"In Progress"', 'format': fmt_orange})
+                    # Highlight Status
+                    if 'Completion Status' in det_df.columns:
+                        status_col_idx = det_df.columns.get_loc('Completion Status')
+                        ws.conditional_format(start_row+3, status_col_idx, start_row+3+len(det_df), status_col_idx,
+                                              {'type': 'cell', 'criteria': '==', 'value': '"Completed"', 'format': fmt_green})
+                        ws.conditional_format(start_row+3, status_col_idx, start_row+3+len(det_df), status_col_idx,
+                                              {'type': 'cell', 'criteria': '==', 'value': '"In Progress"', 'format': fmt_orange})
 
-                    # Auto-width columns (simple estimation)
                     for i, col in enumerate(summ.columns): ws.set_column(i, i, 15)
 
                 st.download_button("📥 Download One-Sheet Excel", buffer.getvalue(), "Audit_Report_Merged.xlsx", "application/vnd.ms-excel")
