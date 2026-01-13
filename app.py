@@ -109,12 +109,21 @@ def main():
     users_df['Username'] = users_df['Username'].astype(str)
     users_df['Password'] = users_df['Password'].astype(str)
     
+    # --- PREPARE LOGIC DATAFRAME (CRITICAL FIX) ---
     tasks_df_logic = tasks_df.copy()
     if not tasks_df_logic.empty:
+        # Numeric Conversion
         for col in ['Number of Findings', 'Number of Transaction']:
-            if col in tasks_df_logic.columns: tasks_df_logic[col] = pd.to_numeric(tasks_df_logic[col], errors='coerce').fillna(0)
+            if col in tasks_df_logic.columns: 
+                tasks_df_logic[col] = pd.to_numeric(tasks_df_logic[col], errors='coerce').fillna(0)
+        
+        # Date Conversion (The "Anti-Crash" Fix)
         for col in ['Journal Date', 'Assigned Date']:
-            if col in tasks_df_logic.columns: tasks_df_logic[col] = tasks_df_logic[col].apply(parse_date_robustly)
+            if col in tasks_df_logic.columns: 
+                # 1. Parse text to objects
+                tasks_df_logic[col] = tasks_df_logic[col].apply(parse_date_robustly)
+                # 2. FORCE pandas datetime64 type. This prevents the AttributeError.
+                tasks_df_logic[col] = pd.to_datetime(tasks_df_logic[col], errors='coerce')
 
     # LOGIN
     if not st.session_state.logged_in:
@@ -151,6 +160,7 @@ def main():
                 c1, c2, c3, c4, c5 = st.columns(5)
                 df_f = tasks_df_logic.copy()
                 with c1: 
+                    # Dropna ensures we don't crash on NaT (Not a Time)
                     d = sorted(df_f['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in df_f else []
                     if d: 
                         s = st.multiselect("Journal Date", d); 
@@ -264,13 +274,14 @@ def main():
                         st.success("Added"); st.rerun()
             st.dataframe(users_df)
 
-        # 7. REPORT (UPDATED WITH EMOJIS & FILTERS)
+        # 7. REPORT
         with tabs[6]:
             st.header("📑 One-Sheet Report Generator")
             with st.expander("🔻 Report Filters (Leave blank to select ALL)", expanded=True):
                 with st.form("rep_form"):
                     col_r1, col_r2 = st.columns(2)
                     with col_r1:
+                        # Dropna ensures no NaT errors in filters
                         d1 = sorted(tasks_df_logic['Journal Date'].dropna().dt.date.unique()) if 'Journal Date' in tasks_df_logic else []
                         s_jd = st.multiselect("Journal Date", d1)
                     with col_r2:
